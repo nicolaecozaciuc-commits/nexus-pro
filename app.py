@@ -348,10 +348,20 @@ def search():
             # Bonus pentru dimensiuni EXACTE (ex: 600x600 gaseste 600X600 primul)
             query_nums_list = re.findall(r'\d+', query.upper())
             if len(query_nums_list) >= 2:
-                query_dims = ''.join(query_nums_list)  # "600600"
-                prod_dims = re.sub(r'[^0-9]', '', prod['d'].upper())  # extrage toate numerele
-                if query_dims in prod_dims:
-                    score *= 3  # Bonus mare pentru match exact dimensiuni
+                # Verifica daca AMBELE dimensiuni apar ca numere separate in produs
+                prod_nums = set(re.findall(r'\d+', prod['d'].upper()))
+                dim1, dim2 = query_nums_list[0], query_nums_list[1]
+                # Pentru dimensiuni identice (600x600), verificam ca numarul apare in produs
+                # Pentru dimensiuni diferite (600x1200), verificam ambele
+                if dim1 == dim2:
+                    if dim1 in prod_nums:
+                        # Verificam ca e format XxY in denumire (ex: 600X600)
+                        pattern = dim1 + r'[Xx]' + dim2
+                        if re.search(pattern, prod['d'].upper()):
+                            score *= 3
+                else:
+                    if dim1 in prod_nums and dim2 in prod_nums:
+                        score *= 3
             
             results.append({
                 'd': prod['d'],
