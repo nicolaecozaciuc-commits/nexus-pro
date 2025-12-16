@@ -88,12 +88,12 @@ SYNONYMS = {
     'BLUZT': ['BULZI', 'BULZ'],
     'DFIER': ['FIER', 'OTEL'],
     
-    # Abrevieri comune
+    # Abrevieri comune (adaugat din v8)
     'AUTOCUR': ['AUTOCURATIRE', 'AUTOCURATARE'],
     'AUTOCURATIRE': ['AUTOCUR'],
     'IGENIC': ['IGIENIC'],
     'IGIENIC': ['IGENIC'],
-    'TERMOVENTIL': ['TERMOSTATIC', 'TERMOSTAT', 'VANA TERMOSTATATA'],
+    'TERMOVENTIL': ['VTC', 'VENTIL TERMIC'],
     'VASE': ['VAS'],
     'EXP': ['EXPANSIUNE'],
     'EXPANSIUNE': ['EXP'],
@@ -112,29 +112,13 @@ for key, values in SYNONYMS.items():
 def normalize_text(text):
     """Normalizeaza textul pentru cautare"""
     text = text.upper()
-    
-    # PRIMUL PAS: Normalizeaza fractiile INAINTE de a sterge caracterele speciale
-    # 11/4 -> 1_1_4 (temporar cu underscore)
-    text = re.sub(r'\b11\s*/\s*4\b', '1_1_4', text)
-    text = re.sub(r'\b11\s*/\s*2\b', '1_1_2', text)
-    # 1.1/4 -> 1_1_4
-    text = re.sub(r'1\s*\.\s*1\s*/\s*4', '1_1_4', text)
-    text = re.sub(r'1\s*\.\s*1\s*/\s*2', '1_1_2', text)
-    # 1/2, 3/4, 1/4 -> cu underscore
-    text = re.sub(r'\b1\s*/\s*2\b', '1_2', text)
-    text = re.sub(r'\b3\s*/\s*4\b', '3_4', text)
-    text = re.sub(r'\b1\s*/\s*4\b', '1_4', text)
-    
     # Inlocuieste caractere speciale cu spatiu
     text = re.sub(r'[X/\-\"\'\.\,\(\)\°]', ' ', text)
-    
-    # Restaureaza fractiile (underscore -> /)
-    text = text.replace('1_1_4', '1.1/4')
-    text = text.replace('1_1_2', '1.1/2')
-    text = text.replace('1_2', '1/2')
-    text = text.replace('3_4', '3/4')
-    text = text.replace('1_4', '1/4')
-    
+    # Normalizeaza dimensiuni comune
+    text = re.sub(r'1\s*1\s*/\s*2', '1 1/2', text)
+    text = re.sub(r'1\s*/\s*2', '1/2', text)
+    text = re.sub(r'3\s*/\s*4', '3/4', text)
+    text = re.sub(r'1\s*/\s*4', '1/4', text)
     # Elimina spatii multiple
     text = re.sub(r'\s+', ' ', text).strip()
     return text
@@ -295,25 +279,10 @@ def search():
             
             # Bonus daca potriveste numere exacte
             query_nums = set(re.findall(r'\d+', query.upper()))
-            prod_nums = set(re.findall(r'\d+', prod['d'].upper()))
-            
-            # BONUS MARE pentru match EXACT de dimensiuni (ex: 600X600, 600x1200)
-            query_clean = re.sub(r'[^0-9]', '', query.upper())  # "600 x 600" -> "600600"
-            prod_clean = re.sub(r'[^0-9]', '', prod['d'].upper())  # "600X600" -> "600600"
-            
-            # Daca query are 2+ numere si toate numerele concatenate apar in produs
-            query_nums_list = re.findall(r'\d+', query.upper())
-            if len(query_nums_list) >= 2:
-                # Construieste pattern: 600X800 sau 600x800 sau 600 800
-                dim_pattern = ''.join(query_nums_list)  # "600800"
-                if dim_pattern in prod_clean:
-                    score *= 5  # BONUS FOARTE MARE pentru match exact dimensiuni
-            
-            # Match normal de numere
-            if query_nums and query_nums.issubset(prod_nums):
-                score *= 3  # Triple score pentru match exact
-            elif len(query_nums & prod_nums) > 0:
-                score *= (1 + len(query_nums & prod_nums) * 0.3)
+            prod_nums = set(re.findall(r'\d+', prod.get('norm', '')))
+            num_matches = len(query_nums & prod_nums)
+            if num_matches > 0:
+                score *= (1 + num_matches * 0.3)
             
             results.append({
                 'd': prod['d'],
@@ -407,7 +376,7 @@ def search():
             
             results.sort(key=lambda r: (get_pompa_priority(r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 4: TERMO+ prioritar cand se cauta explicit termo+
+        # REGULA SPECIALA 4: TERMO+ prioritar cand se cauta explicit termo+ (adaugat din v8)
         if 'TERMO+' in query_upper or 'TERMO +' in query_upper:
             def get_termo_priority(denumire):
                 d = denumire.upper()
@@ -416,12 +385,10 @@ def search():
                 return 10
             results.sort(key=lambda r: (get_termo_priority(r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 5: PUFFER - prioritate TERMO+ cu METAL + INOX
+        # REGULA SPECIALA 5: PUFFER - prioritate TERMO+ cu METAL + INOX (adaugat din v8)
         is_puffer_query = 'PUFFER' in query_upper
         
         if is_puffer_query:
-            is_igienic = 'IGIENIC' in query_upper or 'IGENIC' in query_upper
-            
             def get_puffer_priority(denumire):
                 d = denumire.upper()
                 has_termo = 'TERMO+' in d or 'TERMO +' in d
