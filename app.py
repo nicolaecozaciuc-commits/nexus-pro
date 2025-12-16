@@ -93,6 +93,10 @@ SYNONYMS = {
     'AUTOCURATIRE': ['AUTOCUR'],
     'IGENIC': ['IGIENIC'],
     'IGIENIC': ['IGENIC'],
+    'TERMOVENTIL': ['TERMOSTATIC', 'TERMOSTAT', 'VANA TERMOSTATATA'],
+    'VASE': ['VAS'],
+    'EXP': ['EXPANSIUNE'],
+    'EXPANSIUNE': ['EXP'],
 }
 
 # Construim reverse lookup pentru sinonime
@@ -108,13 +112,29 @@ for key, values in SYNONYMS.items():
 def normalize_text(text):
     """Normalizeaza textul pentru cautare"""
     text = text.upper()
+    
+    # PRIMUL PAS: Normalizeaza fractiile INAINTE de a sterge caracterele speciale
+    # 11/4 -> 1_1_4 (temporar cu underscore)
+    text = re.sub(r'\b11\s*/\s*4\b', '1_1_4', text)
+    text = re.sub(r'\b11\s*/\s*2\b', '1_1_2', text)
+    # 1.1/4 -> 1_1_4
+    text = re.sub(r'1\s*\.\s*1\s*/\s*4', '1_1_4', text)
+    text = re.sub(r'1\s*\.\s*1\s*/\s*2', '1_1_2', text)
+    # 1/2, 3/4, 1/4 -> cu underscore
+    text = re.sub(r'\b1\s*/\s*2\b', '1_2', text)
+    text = re.sub(r'\b3\s*/\s*4\b', '3_4', text)
+    text = re.sub(r'\b1\s*/\s*4\b', '1_4', text)
+    
     # Inlocuieste caractere speciale cu spatiu
     text = re.sub(r'[X/\-\"\'\.\,\(\)\°]', ' ', text)
-    # Normalizeaza dimensiuni comune
-    text = re.sub(r'1\s*1\s*/\s*2', '1 1/2', text)
-    text = re.sub(r'1\s*/\s*2', '1/2', text)
-    text = re.sub(r'3\s*/\s*4', '3/4', text)
-    text = re.sub(r'1\s*/\s*4', '1/4', text)
+    
+    # Restaureaza fractiile (underscore -> /)
+    text = text.replace('1_1_4', '1.1/4')
+    text = text.replace('1_1_2', '1.1/2')
+    text = text.replace('1_2', '1/2')
+    text = text.replace('3_4', '3/4')
+    text = text.replace('1_4', '1/4')
+    
     # Elimina spatii multiple
     text = re.sub(r'\s+', ' ', text).strip()
     return text
