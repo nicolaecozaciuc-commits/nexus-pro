@@ -183,6 +183,11 @@ def load_database():
             words = get_search_words(den)
             den_norm = normalize_text(den)
             
+            # Adaugam si codul in cuvintele de cautare
+            if final_code:
+                code_words = get_search_words(final_code)
+                words.update(code_words)
+            
             # Actualizam frecventa cuvintelor
             for w in words:
                 WORD_FREQ[w] += 1
@@ -234,7 +239,15 @@ def search():
         
         for prod in PRODUCTS_DB:
             matched_words = query_words & prod['words']
-            if not matched_words:
+            
+            # Cautare substring in cod si denumire (pentru coduri ca R470AX003)
+            query_upper = query.upper()
+            substring_match = False
+            if len(query_upper) >= 3:
+                if query_upper in prod['c'].upper() or query_upper in prod['d'].upper():
+                    substring_match = True
+            
+            if not matched_words and not substring_match:
                 continue
             
             # Calcul scor
@@ -245,8 +258,12 @@ def search():
                 idf = total / freq
                 score += idf
             
+            # Bonus pentru substring match in cod
+            if substring_match:
+                score += 100  # Prioritate mare pentru match exact in cod
+            
             # Bonus pentru mai multe potriviri
-            match_ratio = len(matched_words) / len(query_words)
+            match_ratio = len(matched_words) / len(query_words) if matched_words else (0.5 if substring_match else 0)
             score *= (1 + match_ratio)
             
             # Bonus daca potriveste numere exacte
