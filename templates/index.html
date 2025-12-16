@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus PRO v1.1 - Server Edition</title>
+    <!-- Stiluri externe rapide -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        body { overflow: hidden; height: 100vh; background-color: #f1f5f9; }
+        
+        /* Layout Split */
+        .split-view { display: flex; height: calc(100vh - 64px); }
+        
+        /* Viewer Imagine */
+        .viewer-pane { width: 45%; background: #0f172a; position: relative; display: flex; flex-direction: column; border-right: 1px solid #334155; }
+        .canvas-area { flex: 1; position: relative; overflow: hidden; cursor: grab; width: 100%; display: flex; align-items: center; justify-content: center; }
+        .canvas-area:active { cursor: grabbing; }
+        #mainImage { max-width: 100%; max-height: 100%; transition: transform 0.1s ease-out; transform-origin: 0 0; }
+        
+        /* Thumbnails */
+        .thumbs-strip { height: 100px; background: #1e293b; border-top: 1px solid #334155; display: flex; gap: 10px; padding: 12px; overflow-x: auto; z-index: 10; }
+        .thumb { width: 70px; height: 70px; border-radius: 6px; border: 2px solid transparent; background-size: cover; background-position: center; cursor: pointer; position: relative; flex-shrink: 0; opacity: 0.6; transition: 0.2s; }
+        .thumb:hover { opacity: 1; }
+        .thumb.active { border-color: #3b82f6; opacity: 1; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2); }
+        .thumb-badge { position: absolute; top: -6px; right: -6px; background: #10b981; color: white; border-radius: 50%; width: 20px; height: 20px; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+        .thumb-del { position: absolute; top: -6px; left: -6px; background: #ef4444; color: white; border-radius: 50%; width: 20px; height: 20px; font-size: 12px; display: flex; align-items: center; justify-content: center; opacity: 0; }
+        .thumb:hover .thumb-del { opacity: 1; }
+
+        /* Data Pane */
+        .data-pane { width: 55%; background: white; display: flex; flex-direction: column; }
+        .table-scroll { flex: 1; overflow-y: auto; scroll-behavior: smooth; position: relative; }
+        
+        /* Tabel */
+        thead { position: sticky; top: 0; z-index: 20; background: #f8fafc; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        
+        /* Input-uri */
+        .inp-qty { text-align: center; font-weight: bold; border-color: #cbd5e1; }
+        .inp-code { background: #f8fafc; font-family: monospace; color: #475569; }
+        
+        /* Dropdown Search */
+        .suggestions { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #3b82f6; border-radius: 0 0 6px 6px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); max-height: 300px; overflow-y: auto; z-index: 50; }
+        .sugg-item { padding: 10px; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .sugg-item:hover { background: #eff6ff; }
+
+        /* Loader */
+        .loader-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.95); z-index: 100; display: none; flex-direction: column; align-items: center; justify-content: center; }
+        .spinner { width: 50px; height: 50px; border: 4px solid #e2e8f0; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <!-- LOADER -->
+    <div id="loader" class="loader-overlay">
+        <div class="spinner mb-4"></div>
+        <h2 class="text-2xl font-bold text-slate-800" id="loaderTitle">Procesez...</h2>
+        <div class="w-64 h-2 bg-slate-200 rounded mt-4 overflow-hidden">
+            <div id="progressBar" class="h-full bg-blue-600 w-0 transition-all duration-300"></div>
+        </div>
+        <p class="text-slate-500 mt-2 text-sm font-mono" id="loaderText">Inițializare...</p>
+    </div>
+
+    <!-- HEADER -->
+    <header class="h-16 bg-slate-900 text-white flex items-center justify-between px-6 shadow-md z-30 relative">
+        <div class="flex items-center gap-3">
+            <i class="fa-solid fa-server text-blue-400 text-xl"></i>
+            <h1 class="font-bold text-lg">Nexus PRO <span class="text-xs bg-slate-700 px-2 py-0.5 rounded text-blue-300 ml-2">SERVER v1.1</span></h1>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="flex items-center bg-slate-800 rounded px-3 py-1.5 border border-slate-700">
+                <i class="fa-solid fa-key text-slate-500 text-xs mr-2"></i>
+                <input type="password" id="apiKey" placeholder="OpenAI API Key (sk-...)" class="bg-transparent border-none text-sm w-48 focus:outline-none text-white">
+            </div>
+        </div>
+    </header>
+
+    <!-- SPLIT VIEW -->
+    <div class="split-view">
+        
+        <!-- LEFT: IMAGES -->
+        <div class="viewer-pane">
+            <div class="canvas-area" id="panArea">
+                <div id="emptyState" class="text-slate-500 text-center pointer-events-none">
+                    <i class="fa-regular fa-images text-5xl mb-4 opacity-20"></i>
+                    <p>Încarcă imagini din dreapta</p>
+                </div>
+                <img id="mainImage" src="" class="hidden">
+                
+                <!-- Zoom Controls -->
+                <div class="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-2 bg-black/50 backdrop-blur rounded-full p-1.5 shadow-lg">
+                    <button onclick="zoom(0.1)" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-content: center;"><i class="fa-solid fa-plus"></i></button>
+                    <button onclick="resetZoom()" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center"><i class="fa-solid fa-rotate"></i></button>
+                    <button onclick="zoom(-0.1)" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center"><i class="fa-solid fa-minus"></i></button>
+                </div>
+            </div>
+            
+            <div class="thumbs-strip" id="thumbsContainer">
+                <!-- JS will inject thumbs here -->
+            </div>
+        </div>
+
+        <!-- RIGHT: DATA -->
+        <div class="data-pane">
+            <!-- Toolbar -->
+            <div class="p-4 border-b border-slate-200 bg-white flex items-center gap-3 shadow-sm z-20">
+                <label class="cursor-pointer bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg border border-blue-200 flex items-center gap-2 font-semibold transition text-sm">
+                    <i class="fa-solid fa-folder-plus"></i> Adaugă Poze
+                    <input type="file" id="imgInput" multiple accept="image/*" class="hidden">
+                </label>
+                
+                <div class="flex-1"></div>
+                <span id="pageCount" class="text-xs text-slate-400 font-bold mr-2 uppercase">0 Pagini</span>
+
+                <button onclick="processBatch()" class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-5 py-2 rounded-lg shadow-md font-bold flex items-center gap-2 transition text-sm">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> PROCESEAZĂ TOT
+                </button>
+                
+                <button onclick="exportCSV()" class="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition text-sm">
+                    <i class="fa-solid fa-download"></i>
+                </button>
+            </div>
+
+            <!-- Table -->
+            <div class="table-scroll bg-slate-50">
+                <table class="w-full text-left text-sm border-collapse">
+                    <thead class="bg-slate-100 text-slate-500 uppercase text-xs font-semibold">
+                        <tr>
+                            <th class="px-4 py-3 w-16 text-center border-b border-slate-200">Cant</th>
+                            <th class="px-4 py-3 w-1/3 border-b border-slate-200">Text Original</th>
+                            <th class="px-4 py-3 border-b border-slate-200">Căutare Produs (Server)</th>
+                            <th class="px-4 py-3 w-32 border-b border-slate-200">Cod</th>
+                            <th class="px-4 py-3 w-10 border-b border-slate-200"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody" class="bg-white">
+                        <!-- Rows injected here -->
+                    </tbody>
+                </table>
+                
+                <div id="emptyTable" class="flex flex-col items-center justify-center p-12 text-slate-300">
+                    <i class="fa-solid fa-table-cells text-4xl mb-4"></i>
+                    <p>Lista este goală</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- STATE ---
+        let IMAGES = [];
+        let activeIdx = -1;
+        let scale = 1, pX = 0, pY = 0, isDragging = false, sX, sY;
+        const imgEl = document.getElementById('mainImage');
+
+        // --- 1. IMAGE HANDLING ---
+        document.getElementById('imgInput').addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                document.getElementById('emptyState').classList.add('hidden');
+                
+                for (let f of e.target.files) {
+                    const b64 = await toBase64(f);
+                    IMAGES.push({ 
+                        id: Date.now() + Math.random(), 
+                        base64: b64, 
+                        processed: false 
+                    });
+                }
+                renderThumbs();
+                // Select first new if none active
+                if (activeIdx === -1 && IMAGES.length > 0) setActive(IMAGES.length - e.target.files.length);
+            }
+        });
+
+        const toBase64 = file => new Promise(r => {
+            const reader = new FileReader();
+            reader.onload = () => r(reader.result.split(',')[1]);
+            reader.readAsDataURL(file);
+        });
+
+        function renderThumbs() {
+            const c = document.getElementById('thumbsContainer');
+            c.innerHTML = '';
+            document.getElementById('pageCount').innerText = `${IMAGES.length} PAGINI`;
+
+            IMAGES.forEach((img, idx) => {
+                const div = document.createElement('div');
+                div.className = `thumb ${idx === activeIdx ? 'active' : ''}`;
+                div.style.backgroundImage = `url(data:image/jpeg;base64,${img.base64})`;
+                div.onclick = () => setActive(idx);
+
+                // Delete btn
+                const del = document.createElement('div');
+                del.className = 'thumb-del';
+                del.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+                del.onclick = (e) => { e.stopPropagation(); removeImg(idx); };
+                div.appendChild(del);
+
+                // Success badge
+                if(img.processed) {
+                    const badge = document.createElement('div');
+                    badge.className = 'thumb-badge';
+                    badge.innerHTML = '<i class="fa-solid fa-check"></i>';
+                    div.appendChild(badge);
+                }
+
+                c.appendChild(div);
+            });
+        }
+
+        function setActive(idx) {
+            if (idx < 0 || idx >= IMAGES.length) return;
+            activeIdx = idx;
+            imgEl.src = `data:image/jpeg;base64,${IMAGES[idx].base64}`;
+            imgEl.classList.remove('hidden');
+            resetZoom();
+            renderThumbs();
+        }
+
+        function removeImg(idx) {
+            IMAGES.splice(idx, 1);
+            if (IMAGES.length === 0) {
+                activeIdx = -1;
+                imgEl.classList.add('hidden');
+                document.getElementById('emptyState').classList.remove('hidden');
+            } else {
+                setActive(Math.max(0, idx - 1));
+            }
+            renderThumbs();
+        }
+
+        // --- 2. ZOOM LOGIC ---
+        function updateTr() { imgEl.style.transform = `translate(${pX}px, ${pY}px) scale(${scale})`; }
+        function zoom(d) { scale = Math.max(0.1, scale + d); updateTr(); }
+        function resetZoom() { scale = 1; pX = 0; pY = 0; updateTr(); }
+
+        const pan = document.getElementById('panArea');
+        pan.addEventListener('mousedown', e => { isDragging = true; sX = e.clientX - pX; sY = e.clientY - pY; e.preventDefault(); });
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mousemove', e => { 
+            if (isDragging) { e.preventDefault(); pX = e.clientX - sX; pY = e.clientY - sY; updateTr(); } 
+        });
+        pan.addEventListener('wheel', e => { e.preventDefault(); zoom(e.deltaY > 0 ? -0.1 : 0.1); });
+
+        // --- 3. SERVER SEARCH ---
+        let debounce;
+        async function searchServer(input, uid) {
+            const val = input.value;
+            const box = document.getElementById(`sugg_${uid}`);
+            
+            // Hide others
+            document.querySelectorAll('.suggestions').forEach(el => el.classList.add('hidden'));
+
+            if (val.length < 2) return;
+
+            clearTimeout(debounce);
+            debounce = setTimeout(async () => {
+                try {
+                    const res = await fetch('/api/search', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ query: val })
+                    });
+                    const results = await res.json();
+
+                    box.innerHTML = '';
+                    if (results.length > 0) {
+                        box.classList.remove('hidden');
+                        results.forEach(prod => {
+                            const div = document.createElement('div');
+                            div.className = 'sugg-item';
+                            div.innerHTML = `
+                                <span class="font-semibold text-slate-700">${prod.d}</span>
+                                <span class="bg-slate-100 text-slate-500 text-xs px-2 py-0.5 rounded font-mono">${prod.c}</span>
+                            `;
+                            div.onclick = () => {
+                                input.value = prod.d;
+                                document.getElementById(`c_${uid}`).value = prod.c;
+                                box.classList.add('hidden');
+                                // Mark as valid (Green)
+                                input.closest('tr').querySelector('td:first-child').style.borderLeft = "4px solid #10b981";
+                            };
+                            box.appendChild(div);
+                        });
+                    }
+                } catch (e) {
+                    console.error("Server search failed", e);
+                }
+            }, 250);
+        }
+
+        // Close dropdowns
+        document.addEventListener('click', e => {
+            if (!e.target.closest('td')) document.querySelectorAll('.suggestions').forEach(el => el.classList.add('hidden'));
+        });
+
+        // --- 4. BATCH PROCESSING (FIXED JSON) ---
+        async function processBatch() {
+            const key = document.getElementById('apiKey').value;
+            if (!key) return alert("Introdu cheia API!");
+            if (IMAGES.length === 0) return alert("Adaugă poze!");
+
+            const loader = document.getElementById('loader');
+            const bar = document.getElementById('progressBar');
+            const txt = document.getElementById('loaderText');
+            loader.style.display = 'flex';
+
+            for (let i = 0; i < IMAGES.length; i++) {
+                if (IMAGES[i].processed) continue;
+
+                setActive(i);
+                txt.innerText = `Procesez Pagina ${i + 1} din ${IMAGES.length}...`;
+                bar.style.width = `${((i + 1) / IMAGES.length) * 100}%`;
+
+                try {
+                    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                        method: "POST",
+                        headers: {
+                            "Authorization": `Bearer ${key}`,
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            model: "gpt-4o",
+                            messages: [{ role: "user", content: [
+                                { type: "text", text: "Extrage produsele. JSON FORMAT STRICT: { \"items\": [{ \"text\": \"nume original\", \"qty\": 1 }] }" },
+                                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${IMAGES[i].base64}` } }
+                            ]}],
+                            response_format: { type: "json_object" }
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (data.error) throw new Error(data.error.message);
+
+                    // FIX: Clean JSON string from Markdown
+                    let raw = data.choices[0].message.content;
+                    raw = raw.replace(/```json/g, '').replace(/```/g, '').trim();
+                    
+                    const items = JSON.parse(raw).items;
+                    await addRows(items, i + 1); // Await for auto-match
+                    IMAGES[i].processed = true;
+
+                } catch (e) {
+                    console.error(e);
+                    alert(`Eroare pagina ${i + 1}: ${e.message}`);
+                }
+            }
+
+            renderThumbs();
+            loader.style.display = 'none';
+        }
+
+        async function addRows(items, pageNum) {
+            const tbody = document.getElementById('tableBody');
+            document.getElementById('emptyTable').classList.add('hidden');
+
+            for (let it of items) {
+                const uid = Date.now() + Math.random().toString(16).slice(2);
+                
+                // Auto-match against SERVER
+                let match = { d: '', c: '' };
+                try {
+                    const res = await fetch('/api/search', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ query: it.text })
+                    });
+                    const found = await res.json();
+                    if(found.length > 0) match = found[0]; // Take best match
+                } catch(e) {}
+
+                const tr = document.createElement('tr');
+                tr.className = "border-b border-slate-100 hover:bg-slate-50 transition";
+                
+                // Color status logic
+                const borderStyle = match.c ? "border-l-4 border-l-green-500" : "border-l-4 border-l-amber-400 bg-amber-50";
+
+                tr.innerHTML = `
+                    <td class="p-2 ${borderStyle}">
+                        <input type="number" value="${it.qty}" class="inp-qty w-full border rounded p-1 text-center font-bold bg-white">
+                    </td>
+                    <td class="p-2 text-slate-500 italic text-sm relative group">
+                        ${it.text}
+                        <span class="absolute -top-2 -left-2 bg-slate-200 text-[10px] px-1 rounded opacity-0 group-hover:opacity-100 transition">P${pageNum}</span>
+                    </td>
+                    <td class="p-2 relative">
+                        <input type="text" value="${match.d}" 
+                               class="w-full border rounded p-1.5 focus:border-blue-500 outline-none text-sm" 
+                               placeholder="Caută..." onkeyup="searchServer(this, '${uid}')">
+                        <div id="sugg_${uid}" class="suggestions hidden"></div>
+                    </td>
+                    <td class="p-2">
+                        <input type="text" id="c_${uid}" value="${match.c}" readonly class="inp-code w-full border rounded p-1 text-xs">
+                    </td>
+                    <td class="p-2 text-center">
+                        <button onclick="this.closest('tr').remove()" class="text-red-400 hover:text-red-600 transition"><i class="fa-solid fa-trash"></i></button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            }
+            // Scroll bottom
+            const container = document.querySelector('.table-scroll');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // --- 5. EXPORT ---
+        function exportCSV() {
+            let csv = "Cod;Cantitate;Pret\n";
+            const rows = document.querySelectorAll('#tableBody tr');
+            if(rows.length===0) return alert("Nu ai date!");
+            
+            rows.forEach(r => {
+                const c = r.querySelector('[id^="c_"]').value;
+                const q = r.querySelector('[type="number"]').value;
+                if(c) csv += `${c};${q};0\n`;
+            });
+            
+            const blob = new Blob([csv], {type:'text/csv'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Nexus_Export_${Date.now()}.csv`;
+            a.click();
+        }
+    </script>
+</body>
+</html>
