@@ -345,6 +345,14 @@ def search():
             elif rulaj > 100:
                 score *= 1.1  # Bonus 10% pentru produse cu rulaj
             
+            # Bonus pentru dimensiuni EXACTE (ex: 600x600 gaseste 600X600 primul)
+            query_nums_list = re.findall(r'\d+', query.upper())
+            if len(query_nums_list) >= 2:
+                query_dims = ''.join(query_nums_list)  # "600600"
+                prod_dims = re.sub(r'[^0-9]', '', prod['d'].upper())  # extrage toate numerele
+                if query_dims in prod_dims:
+                    score *= 3  # Bonus mare pentru match exact dimensiuni
+            
             results.append({
                 'd': prod['d'],
                 'c': prod['c'],
