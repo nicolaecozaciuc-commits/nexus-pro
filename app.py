@@ -3,89 +3,192 @@ import re
 import json
 import requests
 import pandas as pd
+from collections import Counter
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 
-# --- CONFIGURARE GLOBALĂ ---
-# Baza de date va fi încărcată în memoria RAM a serverului
+# --- CONFIGURARE GLOBALA ---
 PRODUCTS_DB = []
+WORD_FREQ = Counter()
+
+# SINONIME pentru domeniul instalatii sanitare/termice
+SYNONYMS = {
+    # Produse principale
+    'CALORIFER': ['RADIATOR', 'ELEMENT', 'CORP'],
+    'RADIATOR': ['CALORIFER', 'ELEMENT', 'CORP'],
+    'TEAVA': ['TIANA', 'TIGANA', 'CONDUCTA', 'TUB'],
+    'TIANA': ['TEAVA', 'TIGANA', 'CONDUCTA'],
+    'TIGANA': ['TEAVA', 'TIANA'],
+    'ROBINET': ['VANA', 'VENTIL'],
+    'BOILER': ['BOLER', 'REZERVOR', 'ACM'],
+    'BOLER': ['BOILER', 'REZERVOR'],
+    
+    # Materiale
+    'OTEL': ['FE', 'FIER', 'METAL'],
+    'ALAMA': ['BRONZ'],
+    'CUPRU': ['CU'],
+    'PPR': ['POLIPROPILENA'],
+    'PEX': ['PEXA', 'PE'],
+    'ZINC': ['ZINT', 'ZINCAT', 'ZN'],
+    'ZINT': ['ZINC', 'ZINCAT', 'ZN'],
+    'ZN': ['ZINC', 'ZINT', 'ZINCAT'],
+    
+    # Dimensiuni - TOL = 1 inch
+    'TOL': ['INCH', 'TOLI'],
+    
+    # Tipuri conexiuni
+    'MF': ['M/F'],
+    'FF': ['F/F'],
+    'MM': ['M/M'],
+    'FE': ['FILET EXTERIOR', 'TATA'],
+    'FI': ['FILET INTERIOR', 'MAMA'],
+    
+    # Accesorii
+    'COT': ['COLT', 'CURBA'],
+    'TEU': ['T', 'RAMIFICATIE'],
+    'MUFA': ['CUPLAJ'],
+    'NIPLU': ['NIPEL'],
+    'REDUCTIE': ['REDUS', 'REDUCER', 'REDUCERE'],
+    'REDUS': ['REDUCTIE', 'REDUCER'],
+    'ADAPTOR': ['ADAPTO', 'RACORD', 'CONECTOR'],
+    'OLANDEZ': ['OLAND', 'HOLENDER'],
+    'PRELUNGITOR': ['PRELUNGITO', 'EXTENSIE'],
+    'BRATARA': ['BRATARI', 'COLIER', 'CLEMA'],
+    'BRATARI': ['BRATARA', 'COLIER', 'CLEMA'],
+    'CLEMA': ['BRATARA', 'BRATARI', 'COLIER'],
+    'DOP': ['CAPAC', 'DOPI'],
+    'SUPAPA': ['SUPAA', 'VALVA', 'CLAPETA'],
+    'CLAPETA': ['SUPAPA', 'VALVA'],
+    'AERISITOR': ['AERISTO', 'DEZAERISITOR'],
+    'FILTRU': ['FILRU', 'FILTER'],
+    
+    # Altele
+    'SERPENTINA': ['SERPENTIN', 'SCHIMBATOR'],
+    'DUBLU': ['DUBLA', 'DOUBLE'],
+    'TERMOSTATIC': ['TERMOSTAT', 'TERMO'],
+    'TERMOSTAT': ['TERMOSTATIC', 'TERMO'],
+    'GOLIRE': ['GOLIR', 'EVACUARE', 'VIDANJARE'],
+    'SENS': ['DIRECTIE'],
+    'VAS': ['RECIPIENT', 'EXPANSIUNE'],
+    'POMPA': ['CIRCULATIE', 'RECIRCULARE'],
+    'SCAUN': ['SCAUNEL', 'SUPORT'],
+    'XILO': ['WILO', 'CIRCULATIE'],
+    'WILO': ['XILO', 'CIRCULATIE'],
+}
+
+# Construim reverse lookup pentru sinonime
+ALL_SYNONYMS = {}
+for key, values in SYNONYMS.items():
+    ALL_SYNONYMS[key] = set(values + [key])
+    for v in values:
+        if v not in ALL_SYNONYMS:
+            ALL_SYNONYMS[v] = set()
+        ALL_SYNONYMS[v].add(key)
+        ALL_SYNONYMS[v].update(values)
+
+def normalize_text(text):
+    """Normalizeaza textul pentru cautare"""
+    text = text.upper()
+    # Inlocuieste caractere speciale cu spatiu
+    text = re.sub(r'[X/\-\"\'\.\,\(\)\°]', ' ', text)
+    # Normalizeaza dimensiuni comune
+    text = re.sub(r'1\s*1\s*/\s*2', '1 1/2', text)
+    text = re.sub(r'1\s*/\s*2', '1/2', text)
+    text = re.sub(r'3\s*/\s*4', '3/4', text)
+    text = re.sub(r'1\s*/\s*4', '1/4', text)
+    # Elimina spatii multiple
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def get_search_words(text):
+    """Obtine cuvintele din text inclusiv sinonimele"""
+    norm = normalize_text(text)
+    words = set()
+    for w in norm.split():
+        if len(w) >= 1:
+            words.add(w)
+            # Adauga si sinonime
+            if w in ALL_SYNONYMS:
+                words.update(ALL_SYNONYMS[w])
+    return words
 
 def load_database():
     """
-    Încarcă baza de date la pornirea serverului.
-    Caută automat fișiere .csv sau .xlsx în folderul curent.
+    Incarca baza de date la pornirea serverului.
+    Cauta automat fisiere .csv sau .xlsx in folderul curent.
     """
-    global PRODUCTS_DB
-    print("🔄 Inițializez încărcarea bazei de date...")
+    global PRODUCTS_DB, WORD_FREQ
+    print("🔄 Initializez incarcarea bazei de date...")
     
-    # Căutăm fișiere posibile
+    # Cautam fisiere posibile
     files = [f for f in os.listdir('.') if f.endswith(('.csv', '.xlsx'))]
-    file_path = files[0] if files else 'produse_nexus.csv' # Fallback
+    file_path = files[0] if files else 'produse_nexus.csv'
     
     if not os.path.exists(file_path):
-        print(f"⚠️ ATENȚIE: Nu am găsit fișierul '{file_path}'. Urcă-l pe server!")
+        print(f"⚠️ ATENTIE: Nu am gasit fisierul '{file_path}'. Urca-l pe server!")
         return
 
     try:
-        # Citire inteligentă (Excel sau CSV)
+        # Citire inteligenta (Excel sau CSV)
         if file_path.endswith('.xlsx'):
             df = pd.read_excel(file_path, dtype=str)
         else:
-            # Încercăm separatori comuni pentru CSV
             try:
                 df = pd.read_csv(file_path, dtype=str, on_bad_lines='skip', engine='python')
             except:
                 df = pd.read_csv(file_path, sep=';', dtype=str, on_bad_lines='skip', engine='python')
 
-        # Normalizare coloane (elimină spații, face totul lowercase pentru detectie)
         df.columns = [c.strip().lower() for c in df.columns]
         
-        # Detectare coloane cheie (Logică adaptată la fișierul tău)
         col_den = next((c for c in df.columns if 'denumire' in c), None)
         col_cod = next((c for c in df.columns if c == 'cod'), None)
         col_sel = next((c for c in df.columns if 'selectie' in c), None)
         
         if not col_den:
-            # Fallback pe indici dacă nu găsim numele coloanelor
-            # Presupunem structura: 0=Cod, 3=Denumire, 12=Selectie
             df = df.iloc[:, [0, 3, 12]]
             df.columns = ['cod_lung', 'denumire', 'cod_scurt']
         else:
-            # Redenumim pentru consistență
             rename_map = {col_den: 'denumire'}
             if col_cod: rename_map[col_cod] = 'cod_lung'
             if col_sel: rename_map[col_sel] = 'cod_scurt'
             df = df.rename(columns=rename_map)
 
-        # Umplem golurile și convertim la string
         df = df.fillna('')
         
-        # Procesare finală pentru viteză
-        # Creăm un câmp "search_text" care conține toate datele relevante
+        # Procesare cu indexare pentru cautare smart
         clean_data = []
+        WORD_FREQ.clear()
+        
         for _, row in df.iterrows():
             den = str(row.get('denumire', '')).strip()
             if len(den) < 2 or den.lower() == 'denumire': continue
             
             c_lung = str(row.get('cod_lung', '')).strip()
             c_scurt = str(row.get('cod_scurt', '')).strip()
-            
-            # Codul final: Preferăm cel scurt
             final_code = c_scurt if c_scurt else c_lung
+            
+            # Normalizare pentru cautare (cu sinonime)
+            words = get_search_words(den)
+            den_norm = normalize_text(den)
+            
+            # Actualizam frecventa cuvintelor
+            for w in words:
+                WORD_FREQ[w] += 1
             
             clean_data.append({
                 'd': den,
                 'c': final_code,
-                # String de căutare optimizat (lowercase)
-                's': f"{den} {c_scurt} {c_lung}".lower()
+                'words': words,
+                'norm': den_norm
             })
             
         PRODUCTS_DB = clean_data
-        print(f"✅ SUCCES: {len(PRODUCTS_DB)} produse încărcate în memorie.")
+        print(f"✅ SUCCES: {len(PRODUCTS_DB)} produse incarcate in memorie.")
+        print(f"📊 Index: {len(WORD_FREQ)} cuvinte unice indexate.")
         
     except Exception as e:
-        print(f"❌ EROARE CRITICĂ la citirea bazei de date: {e}")
+        print(f"❌ EROARE CRITICA la citirea bazei de date: {e}")
 
 # Încărcăm baza la start
 load_database()
@@ -99,34 +202,61 @@ def index():
 @app.route('/api/search', methods=['POST'])
 def search():
     """
-    API endpoint pentru căutarea rapidă.
-    Primește JSON: { "query": "robinet 1/2" }
-    Returnează JSON: [ { "d": "Robinet...", "c": "123" }, ... ]
+    API endpoint pentru cautarea SMART cu sinonime.
+    Primeste JSON: { "query": "robinet 1/2" }
+    Returneaza JSON: [ { "d": "Robinet...", "c": "123" }, ... ]
     """
     try:
         data = request.json
-        query = data.get('query', '').lower().strip()
+        query = data.get('query', '').strip()
         
         if not query or len(query) < 2:
             return jsonify([])
-            
-        # Algoritm de căutare
-        results = []
-        parts = query.split()
         
-        # Limităm căutarea la primele 50 rezultate pentru viteză
-        count = 0
-        limit = 30
+        # Obtine cuvintele din query (cu sinonime)
+        query_words = get_search_words(query)
+        if not query_words:
+            return jsonify([])
+        
+        results = []
+        total = len(PRODUCTS_DB)
         
         for prod in PRODUCTS_DB:
-            # Verificăm dacă TOATE cuvintele din query există în produs
-            # (Ex: "robinet 1/2" -> trebuie să aibă și "robinet" și "1/2")
-            if all(part in prod['s'] for part in parts):
-                results.append(prod)
-                count += 1
-                if count >= limit: break
+            matched_words = query_words & prod['words']
+            if not matched_words:
+                continue
+            
+            # Calcul scor
+            score = 0
+            for w in matched_words:
+                # IDF: cuvinte rare = scor mare
+                freq = WORD_FREQ.get(w, 1)
+                idf = total / freq
+                score += idf
+            
+            # Bonus pentru mai multe potriviri
+            match_ratio = len(matched_words) / len(query_words)
+            score *= (1 + match_ratio)
+            
+            # Bonus daca potriveste numere exacte
+            query_nums = set(re.findall(r'\d+', query.upper()))
+            prod_nums = set(re.findall(r'\d+', prod.get('norm', '')))
+            num_matches = len(query_nums & prod_nums)
+            if num_matches > 0:
+                score *= (1 + num_matches * 0.3)
+            
+            results.append({
+                'd': prod['d'],
+                'c': prod['c'],
+                'score': score,
+                'ratio': match_ratio
+            })
         
-        return jsonify(results)
+        # Sorteaza dupa ratio apoi scor
+        results.sort(key=lambda x: (-x['ratio'], -x['score']))
+        
+        # Returneaza doar d si c (fara scor)
+        return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
         
     except Exception as e:
         print(f"Eroare search: {e}")
