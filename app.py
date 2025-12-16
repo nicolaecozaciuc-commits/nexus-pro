@@ -476,6 +476,39 @@ def search():
             
             results.sort(key=lambda r: (get_puffer_priority(r['d']), -r.get('score', 0)))
         
+        # REGULA SPECIALA 6: KIT TUR+RETUR+CAP TERMOSTATIC
+        # Daca query contine TUR + RETUR + CAP/TERMOSTATIC -> kit Giacomini
+        has_tur = 'TUR' in query_upper
+        has_retur = 'RETUR' in query_upper or 'NET' in query_upper
+        has_cap = 'CAP' in query_upper or 'TERMOSTA' in query_upper
+        
+        if has_tur and (has_retur or has_cap):
+            # Verifica tipul de racord
+            has_pex = 'PEX' in query_upper or 'PE-XA' in query_upper or 'PEXA' in query_upper or ' FE ' in query_upper or query_upper.endswith(' FE')
+            has_ppr = 'PPR' in query_upper or ' FI ' in query_upper or query_upper.endswith(' FI')
+            
+            # Cauta produsele R470 in baza
+            if has_pex and has_retur:
+                # R470AX003 KIT TERMOSTATAT TUR+RETUR+TERMOSTAT 1/2X15*16 GIACOMINI (pentru PEX)
+                for prod in PRODUCTS_DB:
+                    if 'R470AX003' in prod['c'] or 'R470AX003' in prod['d']:
+                        # Adauga la inceput daca nu e deja
+                        kit_result = {'d': prod['d'], 'c': prod['c'], 'score': 99999, 'ratio': 1.0}
+                        results = [kit_result] + [r for r in results if r['c'] != prod['c']]
+                        break
+            elif has_ppr and has_retur:
+                # R470FX003 KIT TERMOSTATAT TUR+RETUR+TERMOSTAT 1/2" FI GIACOMINI (pentru PPR)
+                for prod in PRODUCTS_DB:
+                    if 'R470FX003' in prod['c'] or 'R470FX003' in prod['d']:
+                        kit_result = {'d': prod['d'], 'c': prod['c'], 'score': 99999, 'ratio': 1.0}
+                        results = [kit_result] + [r for r in results if r['c'] != prod['c']]
+                        break
+            elif has_retur:
+                # Daca nu e specificat tipul, arata ambele kituri primele
+                kit_results = [r for r in results if 'R470' in r['c'].upper() or ('KIT' in r['d'].upper() and 'TUR' in r['d'].upper())]
+                other_results = [r for r in results if r not in kit_results]
+                results = kit_results + other_results
+        
         # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
         is_vas_query = 'VAS' in query_upper and ('LITRI' in query_upper or 'LIT' in query_upper or 'L ' in query_upper)
         if is_vas_query:
