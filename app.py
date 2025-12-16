@@ -17,10 +17,14 @@ SYNONYMS = {
     # Produse principale
     'CALORIFER': ['RADIATOR', 'ELEMENT', 'CORP'],
     'RADIATOR': ['CALORIFER', 'ELEMENT', 'CORP'],
+    'SCARITA': ['RADIATOR BAIE', 'PORTPROSOP'],
+    'SCARA': ['RADIATOR BAIE', 'PORTPROSOP'],
     'TEAVA': ['TIANA', 'TIGANA', 'CONDUCTA', 'TUB'],
     'TIANA': ['TEAVA', 'TIGANA', 'CONDUCTA'],
     'TIGANA': ['TEAVA', 'TIANA'],
     'ROBINET': ['VANA', 'VENTIL'],
+    'ROSET': ['ROBINET'],
+    'ROBICT': ['ROBINET'],
     'BOILER': ['BOLER', 'REZERVOR', 'ACM'],
     'BOLER': ['BOILER', 'REZERVOR'],
     
@@ -52,6 +56,8 @@ SYNONYMS = {
     'REDUCTIE': ['REDUS', 'REDUCER', 'REDUCERE'],
     'REDUS': ['REDUCTIE', 'REDUCER'],
     'ADAPTOR': ['ADAPTO', 'RACORD', 'CONECTOR'],
+    'RACORD': ['NACORD', 'RACOR'],
+    'NACORD': ['RACORD'],
     'OLANDEZ': ['OLAND', 'HOLENDER'],
     'PRELUNGITOR': ['PRELUNGITO', 'EXTENSIE'],
     'BRATARA': ['BRATARI', 'COLIER', 'CLEMA'],
@@ -75,6 +81,11 @@ SYNONYMS = {
     'SCAUN': ['SCAUNEL', 'SUPORT'],
     'XILO': ['WILO', 'CIRCULATIE'],
     'WILO': ['XILO', 'CIRCULATIE'],
+    
+    # Erori OCR comune
+    'DUSAR': ['DUSER', 'DUS'],
+    'BLUZT': ['BULZI', 'BULZ'],
+    'DFIER': ['FIER', 'OTEL'],
 }
 
 # Construim reverse lookup pentru sinonime
