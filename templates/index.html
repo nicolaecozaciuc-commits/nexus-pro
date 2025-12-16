@@ -357,7 +357,7 @@
                         body: JSON.stringify({
                             model: "gpt-4o",
                             messages: [{ role: "user", content: [
-                                { type: "text", text: "Extrage produsele din aceasta imagine cu lista scrisa de mana. REGULI IMPORTANTE: 1) Daca vezi un titlu/categorie (ex: CALORIFER OTEL, ROBINET, TEU PPR) urmat de dimensiuni, combina-le (ex: '600x800' sub 'CALORIFER OTEL' devine 'CALORIFER OTEL 600x800'). 2) Fiecare linie cu cantitate e un produs. 3) Ignora liniile fara cantitate sau marcaje (x, -, etc). Raspunde DOAR cu JSON valid. Format: { \"items\": [{ \"text\": \"nume produs complet cu dimensiuni\", \"qty\": cantitate_numar }] }" },
+                                { type: "text", text: "Extrage TOATE produsele din aceasta imagine. REGULI: 1) Extrage FIECARE linie care contine un produs, NU sari peste nicio linie. 2) Daca e o lista scrisa de mana sau tiparita, extrage TOATE elementele de la PRIMA pana la ULTIMA linie. 3) Daca vezi un titlu/categorie urmat de dimensiuni, combina-le. 4) Cantitatea poate fi 'buc', 'bucati', un numar, sau la sfarsitul liniei. 5) Daca nu vezi cantitate explicita, pune qty: 1. 6) Include CENTRALE, PUFFER, BOILER, POMPE - sunt produse importante! Raspunde DOAR cu JSON valid. Format: { \"items\": [{ \"text\": \"nume produs complet\", \"qty\": cantitate_numar }] }" },
                                 { type: "image_url", image_url: { url: `data:image/jpeg;base64,${IMAGES[i].base64}` } }
                             ]}],
                             response_format: { type: "json_object" }
