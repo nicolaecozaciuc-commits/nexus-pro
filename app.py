@@ -266,22 +266,30 @@ def search():
         # Sorteaza dupa ratio apoi scor
         results.sort(key=lambda x: (-x['ratio'], -x['score']))
         
-        # REGULA SPECIALA: Radiatoare OTEL - prioritate 22K daca nu e specificat 11K sau 33K
+        # REGULA SPECIALA 1: Radiatoare OTEL - prioritate TERMO+ si 22K
         query_upper = query.upper()
-        if ('RADIATOR' in query_upper or 'CALORIFER' in query_upper) and 'OTEL' in query_upper:
+        is_radiator_query = ('RADIATOR' in query_upper or 'CALORIFER' in query_upper) and 'OTEL' in query_upper
+        is_scarita_query = 'SCARIT' in query_upper or 'SCARA' in query_upper or ('BAIE' in query_upper and ('RADIATOR' in query_upper or '600' in query_upper))
+        
+        if is_radiator_query or is_scarita_query:
             # Verifica daca NU e specificat 11 sau 33
             has_11 = '11K' in query_upper or ' 11 ' in query_upper or query_upper.endswith(' 11')
             has_33 = '33K' in query_upper or ' 33 ' in query_upper or query_upper.endswith(' 33')
             
-            if not has_11 and not has_33:
-                # Prioritizeaza 22K - muta in fata
-                def is_22k(denumire):
-                    d = denumire.upper()
-                    return '22K' in d or ' 22/' in d or '/22/' in d or 'TIP 22' in d or ' 22 ' in d
-                
-                results_22k = [r for r in results if is_22k(r['d'])]
-                results_other = [r for r in results if not is_22k(r['d'])]
-                results = results_22k + results_other
+            def is_termo_plus(denumire):
+                return 'TERMO+' in denumire.upper() or 'TERMO +' in denumire.upper()
+            
+            def is_22k(denumire):
+                d = denumire.upper()
+                return '22K' in d or ' 22/' in d or '/22/' in d or 'TIP 22' in d or ' 22 ' in d
+            
+            # Prioritate: 1. TERMO+ cu 22K, 2. TERMO+, 3. 22K, 4. restul
+            results_termo_22k = [r for r in results if is_termo_plus(r['d']) and (is_22k(r['d']) or not has_11 and not has_33)]
+            results_termo = [r for r in results if is_termo_plus(r['d']) and r not in results_termo_22k]
+            results_22k = [r for r in results if is_22k(r['d']) and not is_termo_plus(r['d']) and not has_11 and not has_33]
+            results_other = [r for r in results if r not in results_termo_22k and r not in results_termo and r not in results_22k]
+            
+            results = results_termo_22k + results_termo + results_22k + results_other
         
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
