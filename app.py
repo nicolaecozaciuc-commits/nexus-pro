@@ -17,7 +17,7 @@ def load_database():
     print("🔄 Inițializez încărcarea bazei de date...")
     
     # Căutăm fișiere posibile
-    files = [f for f in os.listdir('.') if f.endswith(('.csv', '.xlsx')) and 'nexus' in f.lower()]
+    files = [f for f in os.listdir('.') if f.endswith(('.csv', '.xlsx'))]
     file_path = files[0] if files else 'produse_nexus.csv' # Fallback
     
     if not os.path.exists(file_path):
