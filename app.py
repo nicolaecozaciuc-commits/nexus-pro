@@ -1,4 +1,7 @@
 import os
+import re
+import json
+import requests
 import pandas as pd
 from flask import Flask, render_template, request, jsonify
 
@@ -128,6 +131,52 @@ def search():
     except Exception as e:
         print(f"Eroare search: {e}")
         return jsonify([])
+
+@app.route('/api/ocr', methods=['POST'])
+def ocr():
+    """
+    API endpoint pentru OCR cu Ollama LLaVA local.
+    Primește JSON: { "image": "base64_string" }
+    Returnează JSON: { "items": [{ "text": "...", "qty": 1 }] }
+    """
+    try:
+        data = request.json
+        image_base64 = data.get('image', '')
+        
+        if not image_base64:
+            return jsonify({"error": "No image provided"})
+        
+        # Call Ollama API
+        ollama_response = requests.post(
+            'http://127.0.0.1:11434/api/generate',
+            json={
+                "model": "llava:7b",
+                "prompt": "Extrage produsele din această imagine. Răspunde DOAR cu JSON valid, fără alte explicații. Format exact: { \"items\": [{ \"text\": \"nume produs\", \"qty\": 1 }] }. Dacă vezi cantități, include-le. Dacă nu vezi cantitate, pune qty: 1.",
+                "images": [image_base64],
+                "stream": False
+            },
+            timeout=120
+        )
+        
+        result = ollama_response.json()
+        response_text = result.get('response', '')
+        
+        # Clean and parse JSON
+        response_text = response_text.replace('```json', '').replace('```', '').strip()
+        
+        # Try to find JSON in response
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group())
+            return jsonify(parsed)
+        else:
+            return jsonify({"error": "Nu am putut extrage produse din imagine", "raw": response_text})
+            
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "Timeout - imaginea durează prea mult"})
+    except Exception as e:
+        print(f"Eroare OCR: {e}")
+        return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
     # Configurare pentru rulare locală sau server
