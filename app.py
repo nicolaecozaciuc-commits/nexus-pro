@@ -295,10 +295,25 @@ def search():
             
             # Bonus daca potriveste numere exacte
             query_nums = set(re.findall(r'\d+', query.upper()))
-            prod_nums = set(re.findall(r'\d+', prod.get('norm', '')))
-            num_matches = len(query_nums & prod_nums)
-            if num_matches > 0:
-                score *= (1 + num_matches * 0.3)
+            prod_nums = set(re.findall(r'\d+', prod['d'].upper()))
+            
+            # BONUS MARE pentru match EXACT de dimensiuni (ex: 600X600, 600x1200)
+            query_clean = re.sub(r'[^0-9]', '', query.upper())  # "600 x 600" -> "600600"
+            prod_clean = re.sub(r'[^0-9]', '', prod['d'].upper())  # "600X600" -> "600600"
+            
+            # Daca query are 2+ numere si toate numerele concatenate apar in produs
+            query_nums_list = re.findall(r'\d+', query.upper())
+            if len(query_nums_list) >= 2:
+                # Construieste pattern: 600X800 sau 600x800 sau 600 800
+                dim_pattern = ''.join(query_nums_list)  # "600800"
+                if dim_pattern in prod_clean:
+                    score *= 5  # BONUS FOARTE MARE pentru match exact dimensiuni
+            
+            # Match normal de numere
+            if query_nums and query_nums.issubset(prod_nums):
+                score *= 3  # Triple score pentru match exact
+            elif len(query_nums & prod_nums) > 0:
+                score *= (1 + len(query_nums & prod_nums) * 0.3)
             
             results.append({
                 'd': prod['d'],
