@@ -11,6 +11,7 @@ app = Flask(__name__)
 # --- CONFIGURARE GLOBALA ---
 PRODUCTS_DB = []
 WORD_FREQ = Counter()
+RULAJ_DB = {}  # Dictionar cu rulaj produse: {cod: cantitate_vanduta}
 
 # SINONIME pentru domeniul instalatii sanitare/termice
 SYNONYMS = {
@@ -220,6 +221,56 @@ def load_database():
 # Încărcăm baza la start
 load_database()
 
+# --- INCARCARE RULAJ PRODUSE ---
+def load_rulaj():
+    """Incarca rulajul produselor din fisierul Excel"""
+    global RULAJ_DB
+    import os
+    
+    # Cauta fisierul cu rulaj
+    rulaj_paths = [
+        'produse_vandute_2025.xls',
+        'produse_vandute_2025_xlsx.xls',
+        '/root/nexus-pro/produse_vandute_2025.xls',
+        '/root/nexus-pro/produse_vandute_2025_xlsx.xls',
+    ]
+    
+    rulaj_file = None
+    for path in rulaj_paths:
+        if os.path.exists(path):
+            rulaj_file = path
+            break
+    
+    if not rulaj_file:
+        print("⚠️ Fisierul cu rulaj nu a fost gasit. Rulaj dezactivat.")
+        return
+    
+    try:
+        import pandas as pd
+        df = pd.read_excel(rulaj_file)
+        df['cantitate_abs'] = df['cantitate'].abs()
+        
+        # Grupam pe cod si sumam cantitatile
+        df_grouped = df.groupby('cod_ext')['cantitate_abs'].sum().reset_index()
+        
+        for _, row in df_grouped.iterrows():
+            cod = str(row['cod_ext']).strip()
+            if cod:
+                RULAJ_DB[cod] = row['cantitate_abs']
+        
+        print(f"📊 RULAJ: {len(RULAJ_DB)} produse cu rulaj incarcat.")
+        
+        # Top 5 pentru verificare
+        top5 = sorted(RULAJ_DB.items(), key=lambda x: -x[1])[:5]
+        for cod, cant in top5:
+            print(f"   🔥 {cod}: {cant:.0f} buc")
+            
+    except Exception as e:
+        print(f"⚠️ Eroare la incarcarea rulajului: {e}")
+
+# Incarcam rulajul
+load_rulaj()
+
 # --- RUTE WEB ---
 
 @app.route('/')
@@ -283,6 +334,16 @@ def search():
             num_matches = len(query_nums & prod_nums)
             if num_matches > 0:
                 score *= (1 + num_matches * 0.3)
+            
+            # Bonus pentru produse cu rulaj mare (cele mai vandute)
+            cod_produs = prod['c']
+            rulaj = RULAJ_DB.get(cod_produs, 0)
+            if rulaj > 10000:
+                score *= 1.5  # Bonus 50% pentru produse foarte vandute
+            elif rulaj > 1000:
+                score *= 1.3  # Bonus 30% pentru produse vandute
+            elif rulaj > 100:
+                score *= 1.1  # Bonus 10% pentru produse cu rulaj
             
             results.append({
                 'd': prod['d'],
