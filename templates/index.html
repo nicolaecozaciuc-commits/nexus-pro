@@ -138,6 +138,7 @@
                 <table class="w-full text-left text-sm border-collapse">
                     <thead class="bg-slate-100 text-slate-500 uppercase text-xs font-semibold">
                         <tr>
+                            <th class="px-2 py-3 w-12 text-center border-b border-slate-200">Nr.</th>
                             <th class="px-4 py-3 w-1/3 border-b border-slate-200">Text Original</th>
                             <th class="px-4 py-3 border-b border-slate-200">Cautare Produs (Server)</th>
                             <th class="px-4 py-3 w-32 border-b border-slate-200">Cod</th>
@@ -415,6 +416,7 @@
                 const borderStyle = match.c ? "border-l-4 border-l-green-500" : "border-l-4 border-l-amber-400 bg-amber-50";
 
                 tr.innerHTML = `
+                    <td class="p-2 text-center text-slate-400 font-mono text-sm row-number"></td>
                     <td class="p-2 text-slate-500 italic text-sm relative group focus-cell ${borderStyle}" title="Click pentru focus pe imagine">
                         ${it.text}
                         <span class="absolute -top-2 -left-2 bg-slate-200 text-[10px] px-1 rounded opacity-0 group-hover:opacity-100 transition">P${pageNum}</span>
@@ -432,7 +434,7 @@
                         <input type="number" value="${it.qty}" class="inp-qty w-full border rounded p-1 text-center font-bold bg-white">
                     </td>
                     <td class="p-2 text-center">
-                        <button onclick="event.stopPropagation(); this.closest('tr').remove()" class="text-red-400 hover:text-red-600 transition"><i class="fa-solid fa-trash"></i></button>
+                        <button onclick="event.stopPropagation(); this.closest('tr').remove(); renumberRows();" class="text-red-400 hover:text-red-600 transition"><i class="fa-solid fa-trash"></i></button>
                     </td>
                 `;
                 
@@ -459,6 +461,8 @@
                 
                 tbody.appendChild(tr);
             }
+            // Renumerotare
+            renumberRows();
             // Scroll bottom
             const container = document.querySelector('.table-scroll');
             container.scrollTop = container.scrollHeight;
@@ -521,6 +525,7 @@
             tr.className = "border-b border-slate-100 hover:bg-slate-50 transition";
             
             tr.innerHTML = `
+                <td class="p-2 text-center text-slate-400 font-mono text-sm row-number"></td>
                 <td class="p-2 text-slate-500 italic text-sm border-l-4 border-l-amber-400 bg-amber-50">
                     <input type="text" class="w-full border rounded p-1 text-sm" placeholder="Text manual...">
                 </td>
@@ -537,10 +542,11 @@
                     <input type="number" value="1" class="inp-qty w-full border rounded p-1 text-center font-bold bg-white">
                 </td>
                 <td class="p-2 text-center">
-                    <button onclick="this.closest('tr').remove()" class="text-red-400 hover:text-red-600 transition"><i class="fa-solid fa-trash"></i></button>
+                    <button onclick="this.closest('tr').remove(); renumberRows();" class="text-red-400 hover:text-red-600 transition"><i class="fa-solid fa-trash"></i></button>
                 </td>
             `;
             tbody.appendChild(tr);
+            renumberRows();
             
             // Focus pe primul input
             tr.querySelector('input').focus();
@@ -548,6 +554,17 @@
             // Scroll to bottom
             const container = document.querySelector('.table-scroll');
             container.scrollTop = container.scrollHeight;
+        }
+        
+        // --- 7. RENUMEROTARE RANDURI ---
+        function renumberRows() {
+            const rows = document.querySelectorAll('#tableBody tr');
+            rows.forEach((row, index) => {
+                const numCell = row.querySelector('.row-number');
+                if (numCell) {
+                    numCell.textContent = index + 1;
+                }
+            });
         }
     </script>
 </body>
