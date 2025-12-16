@@ -79,8 +79,9 @@ SYNONYMS = {
     'VAS': ['RECIPIENT', 'EXPANSIUNE'],
     'POMPA': ['CIRCULATIE', 'RECIRCULARE'],
     'SCAUN': ['SCAUNEL', 'SUPORT'],
-    'XILO': ['WILO', 'CIRCULATIE'],
-    'WILO': ['XILO', 'CIRCULATIE'],
+    'XILO': ['WILO', 'HILO', 'CIRCULATIE'],
+    'WILO': ['XILO', 'HILO', 'CIRCULATIE'],
+    'HILO': ['WILO', 'XILO', 'CIRCULATIE'],
     
     # Erori OCR comune
     'DUSAR': ['DUSER', 'DUS'],
@@ -342,6 +343,28 @@ def search():
                         return 2
                     return 10
                 results.sort(key=lambda r: (get_hidrofor_priority(r['d'], r['c']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 3: Pompe WILO/HILO - prioritate YONOS PICO 1.0
+        is_pompa_query = ('POMPA' in query_upper or 'WILO' in query_upper or 'HILO' in query_upper or 'XILO' in query_upper)
+        
+        if is_pompa_query:
+            def get_pompa_priority(denumire):
+                d = denumire.upper()
+                # YONOS PICO 1.0 = prioritate maxima
+                if 'YONOS PICO 1.0' in d or 'YONOS PICO1.0' in d:
+                    return 1
+                # YONOS PICO = prioritate 2
+                if 'YONOS PICO' in d:
+                    return 2
+                # YONOS = prioritate 3
+                if 'YONOS' in d:
+                    return 3
+                # Alte WILO
+                if 'WILO' in d:
+                    return 5
+                return 10
+            
+            results.sort(key=lambda r: (get_pompa_priority(r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
         is_vas_query = 'VAS' in query_upper and ('LITRI' in query_upper or 'LIT' in query_upper or 'L ' in query_upper)
