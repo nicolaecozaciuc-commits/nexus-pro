@@ -308,6 +308,75 @@ def search():
             
             results = results_termo_22k + results_termo + results_22k + results_other
         
+        # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
+        is_vas_query = 'VAS' in query_upper and ('LITRI' in query_upper or 'EXPAN' in query_upper or any(c.isdigit() for c in query_upper))
+        
+        if is_vas_query:
+            is_hidrofor = 'HIDROFOR' in query_upper or 'APA RECE' in query_upper or 'APA' in query_upper
+            is_incalzire = 'BOILER' in query_upper or 'CENTRALA' in query_upper or 'INCALZIRE' in query_upper or 'BOLER' in query_upper
+            
+            def get_vas_priority(denumire, cod):
+                d = denumire.upper()
+                c = cod.upper()
+                # VR = vas rosu fara suport (prioritate maxima pentru incalzire)
+                if c.startswith('VR') and not c.startswith('VRV'):
+                    return 1
+                # VRV = vas rosu vertical cu suport
+                if c.startswith('VRV'):
+                    return 2
+                # VAV/VAO = vas albastru (pentru hidrofor)
+                if c.startswith('VAV') or c.startswith('VAO'):
+                    return 3 if is_hidrofor else 5
+                return 10
+            
+            if is_incalzire or (not is_hidrofor):
+                # Pentru boiler/centrala: VR > VRV > restul
+                results.sort(key=lambda r: (get_vas_priority(r['d'], r['c']), -r.get('score', 0)))
+            elif is_hidrofor:
+                # Pentru hidrofor: VAV > VAO > restul
+                def get_hidrofor_priority(denumire, cod):
+                    c = cod.upper()
+                    if c.startswith('VAV'):
+                        return 1
+                    if c.startswith('VAO'):
+                        return 2
+                    return 10
+                results.sort(key=lambda r: (get_hidrofor_priority(r['d'], r['c']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
+        is_vas_query = 'VAS' in query_upper and ('LITRI' in query_upper or 'LIT' in query_upper or 'L ' in query_upper)
+        if is_vas_query:
+            is_boiler = 'BOILER' in query_upper or 'CENTRALA' in query_upper or 'INCALZIRE' in query_upper
+            is_hidrofor = 'HIDROFOR' in query_upper or 'APA' in query_upper or 'RECE' in query_upper
+            
+            def get_vas_priority(cod, denumire):
+                c = cod.upper()
+                # VR = vas rosu fara suport (prioritar pentru boiler/centrala)
+                if c.startswith('VR') and not c.startswith('VRV'):
+                    return 1
+                # VRV = vas rosu vertical cu suport
+                if c.startswith('VRV'):
+                    return 2
+                # VAV = vas albastru vertical (prioritar pentru hidrofor)
+                if c.startswith('VAV'):
+                    return 3
+                # VAO = vas albastru orizontal
+                if c.startswith('VAO'):
+                    return 4
+                return 10
+            
+            if is_boiler or (not is_hidrofor):
+                # Prioritate: VR > VRV > altele
+                results.sort(key=lambda r: (get_vas_priority(r['c'], r['d']), -r.get('score', 0)))
+            elif is_hidrofor:
+                # Prioritate: VAV > VAO > altele
+                def get_hidrofor_priority(cod):
+                    c = cod.upper()
+                    if c.startswith('VAV'): return 1
+                    if c.startswith('VAO'): return 2
+                    return 10
+                results.sort(key=lambda r: (get_hidrofor_priority(r['c']), -r.get('score', 0)))
+        
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
         
