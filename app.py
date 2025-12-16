@@ -87,6 +87,12 @@ SYNONYMS = {
     'DUSAR': ['DUSER', 'DUS'],
     'BLUZT': ['BULZI', 'BULZ'],
     'DFIER': ['FIER', 'OTEL'],
+    
+    # Abrevieri comune
+    'AUTOCUR': ['AUTOCURATIRE', 'AUTOCURATARE'],
+    'AUTOCURATIRE': ['AUTOCUR'],
+    'IGENIC': ['IGIENIC'],
+    'IGIENIC': ['IGENIC'],
 }
 
 # Construim reverse lookup pentru sinonime
@@ -365,6 +371,39 @@ def search():
                 return 10
             
             results.sort(key=lambda r: (get_pompa_priority(r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 4: TERMO+ prioritar cand se cauta explicit termo+
+        if 'TERMO+' in query_upper or 'TERMO +' in query_upper:
+            def get_termo_priority(denumire):
+                d = denumire.upper()
+                if 'TERMO+' in d or 'TERMO +' in d:
+                    return 1
+                return 10
+            results.sort(key=lambda r: (get_termo_priority(r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 5: PUFFER - prioritate TERMO+ cu METAL + INOX
+        is_puffer_query = 'PUFFER' in query_upper
+        
+        if is_puffer_query:
+            is_igienic = 'IGIENIC' in query_upper or 'IGENIC' in query_upper
+            
+            def get_puffer_priority(denumire):
+                d = denumire.upper()
+                has_termo = 'TERMO+' in d or 'TERMO +' in d
+                has_metal_inox = 'METAL' in d and 'INOX' in d
+                
+                # TERMO+ cu METAL + INOX = prioritate maxima
+                if has_termo and has_metal_inox:
+                    return 1
+                # TERMO+ = prioritate 2
+                if has_termo:
+                    return 2
+                # METAL + INOX = prioritate 3
+                if has_metal_inox:
+                    return 3
+                return 10
+            
+            results.sort(key=lambda r: (get_puffer_priority(r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
         is_vas_query = 'VAS' in query_upper and ('LITRI' in query_upper or 'LIT' in query_upper or 'L ' in query_upper)
