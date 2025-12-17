@@ -31,7 +31,10 @@ SYNONYMS = {
     
     # Materiale
     'OTEL': ['FE', 'FIER', 'METAL'],
-    'ALAMA': ['BRONZ'],
+    'ALAMA': ['BRONZ', 'BRASS'],
+    'BRONZ': ['ALAMA', 'BRASS'],
+    'CANEA': ['MANETA', 'MANER'],
+    'MANETA': ['CANEA', 'MANER'],
     'CUPRU': ['CU'],
     'PPR': ['POLIPROPILENA'],
     'PEX': ['PEXA', 'PE'],
@@ -549,22 +552,25 @@ def search():
                     return 10
                 results.sort(key=lambda r: (get_hidrofor_priority(r['c']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 7: GRUP POMPARE SOLAR DUBLU - TERMO+ prioritar
+        # REGULA SPECIALA 7: GRUP POMPARE SOLAR DUBLU - GPD212 GRUNDFOS prioritar
         if 'GRUP' in query_upper and 'SOLAR' in query_upper:
             def get_grup_solar_priority(cod, denumire):
                 c = cod.upper()
                 d = denumire.upper()
-                # DUBLU + TERMO+ = prioritate maxima
-                if 'DUBLU' in d and 'TERMO+' in d:
+                # GPD212 = Grup pompare dublu Grundfos (prioritate maxima)
+                if c.startswith('GPD212') or 'GPD212' in d:
                     return 1
-                # GPD = Grup pompare dublu Grundfos
+                # GPD = Alte grupuri pompare dublu Grundfos
                 if c.startswith('GPD'):
                     return 2
+                # DUBLU + TERMO+
+                if 'DUBLU' in d and 'TERMO+' in d:
+                    return 3
                 # DUBLU fara TERMO+
                 if 'DUBLU' in d:
-                    return 3
-                if 'TERMO+' in d:
                     return 4
+                if 'TERMO+' in d:
+                    return 5
                 return 10
             results.sort(key=lambda r: (get_grup_solar_priority(r['c'], r['d']), -r.get('score', 0)))
         
@@ -620,6 +626,78 @@ def search():
                     return 4
                 return 10
             results.sort(key=lambda r: (get_grup_pardoseala_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 12: TERMOMANOMETRU - THMTAA prioritar
+        if 'TERMOMANOMETRU' in query_upper or 'TERMO MANOMETRU' in query_upper:
+            def get_termomanometru_priority(cod, denumire):
+                c = cod.upper()
+                # THMTAA = Termomanometru axial prioritar
+                if c.startswith('THMTAA'):
+                    return 1
+                if c.startswith('THMTA'):
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_termomanometru_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 13: ROBINET CU CANEA/MANETA - ASTER prioritar
+        if 'ROBINET' in query_upper and ('CANEA' in query_upper or 'MANETA' in query_upper):
+            def get_robinet_canea_priority(cod, denumire):
+                d = denumire.upper()
+                # ASTER prioritar daca nu specifica FF sau MF
+                if 'ASTER' in d:
+                    return 1
+                if 'FF' in d or 'MF' in d:
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_robinet_canea_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 14: OLANDEZ BRONZ/ALAMA - OLDR* prioritar
+        if 'OLANDEZ' in query_upper and ('BRONZ' in query_upper or 'ALAMA' in query_upper):
+            def get_olandez_priority(cod, denumire):
+                c = cod.upper()
+                # OLDR = Olandez drept prioritar
+                if c.startswith('OLDR'):
+                    return 1
+                return 10
+            results.sort(key=lambda r: (get_olandez_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 15: FILTRU Y - Y* ECO prioritar
+        if 'FILTRU' in query_upper and 'Y' in query_upper:
+            def get_filtru_y_priority(cod, denumire):
+                c = cod.upper()
+                d = denumire.upper()
+                # Y114 etc = Filtru Y ECO prioritar
+                if c.startswith('Y') and 'FILTRU' in d and 'Y' in d:
+                    return 1
+                if 'ECO' in d:
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_filtru_y_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 16: AERISITOR AUTOMAT GIACOMINI - R88IY003 prioritar
+        if 'AERISITOR' in query_upper and 'GIACOMINI' in query_upper:
+            def get_aerisitor_giacomini_priority(cod, denumire):
+                c = cod.upper()
+                # R88IY003 = Aerisitor automat de coloana Giacomini prioritar
+                if 'R88IY' in c:
+                    return 1
+                if 'GIACOMINI' in denumire.upper():
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_aerisitor_giacomini_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 17: SUPORT VAS - SUPORT PERETE VASE EXP prioritar
+        if 'SUPORT' in query_upper and 'VAS' in query_upper:
+            def get_suport_vas_priority(cod, denumire):
+                d = denumire.upper()
+                c = cod.upper()
+                # SUPORT PERETE VASE EXP prioritar
+                if 'PERETE' in d and 'VAS' in d:
+                    return 1
+                if c.startswith('2068') or c.startswith('2069'):
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_suport_vas_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
