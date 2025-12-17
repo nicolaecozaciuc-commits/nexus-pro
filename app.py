@@ -105,6 +105,9 @@ SYNONYMS = {
     'CONECTORI': ['RACORD', 'RACORDURI', 'CONECTOR'],
     'PARDOSEALA': ['PARDOSEA', 'INCALZIRE PODEA'],
     'PARDOSEA': ['PARDOSEALA'],
+    
+    # Vase expansiune
+    'ALBASTRU': ['HIDROFOR', 'APA RECE', 'APA'],
 }
 
 # Construim reverse lookup pentru sinonime
@@ -314,11 +317,15 @@ def extract_quantity_smart(line_text):
     """
     line_text = line_text.strip()
     
+    # === FIX v20: Elimină dimensiuni cu litri (50L, 100L) înainte de procesare ===
+    # Pentru a evita confuzia între "Vas 50L" (dimensiune) și "50 buc" (cantitate)
+    line_text_clean = re.sub(r'\d+\s*[Ll]\b', '', line_text)
+    
     # ECHIPAMENTE PRINCIPALE - cantitate doar cu "buc" explicit
-    if is_main_equipment(line_text):
+    if is_main_equipment(line_text_clean):
         # Caută pattern "X buc" la final
         match_buc = re.search(r'(\d+)\s*(buc|bucati|bucăți|bucată)\s*$', 
-                             line_text, re.IGNORECASE)
+                             line_text_clean, re.IGNORECASE)
         if match_buc:
             return int(match_buc.group(1))
         else:
@@ -329,12 +336,12 @@ def extract_quantity_smart(line_text):
     else:
         # Caută pattern "X buc" oriunde
         match_buc = re.search(r'(\d+)\s*(buc|bucati|bucăți|bucată)', 
-                             line_text, re.IGNORECASE)
+                             line_text_clean, re.IGNORECASE)
         if match_buc:
             return int(match_buc.group(1))
         
         # Caută ultimul număr din linie (probabil cantitatea)
-        all_numbers = re.findall(r'\d+', line_text)
+        all_numbers = re.findall(r'\d+', line_text_clean)
         if all_numbers:
             # Returnează ultimul număr găsit
             return int(all_numbers[-1])
@@ -474,6 +481,15 @@ def search():
                 prod_dims = re.sub(r'[^0-9]', '', prod['d'].upper())  # extrage toate numerele
                 if query_dims in prod_dims:
                     score *= 3  # Bonus mare pentru match exact dimensiuni
+            
+            # === FIX v20: BOOST MASIV pentru centrale peleți ===
+            # Când utilizatorul caută "centrala peleti", sistemul trebuie să prioritizeze
+            # centrale pe peleți față de alte produse (ex: kit-uri GPL) chiar dacă acestea
+            # au match mai bun pe dimensiuni
+            if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
+                prod_upper = prod['d'].upper()
+                if 'CENTRALA' in prod_upper and 'PELETI' in prod_upper:
+                    score *= 20  # x20 pentru a depăși match-uri pe alte criterii
             
             results.append({
                 'd': prod['d'],
