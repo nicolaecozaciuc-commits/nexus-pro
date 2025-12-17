@@ -79,7 +79,7 @@ SYNONYMS = {
     'SENS': ['DIRECTIE'],
     'VAS': ['RECIPIENT', 'EXPANSIUNE'],
     'POMPA': ['CIRCULATIE', 'RECIRCULARE'],
-    'SCAUN': ['SCAUNEL', 'SUPORT'],
+    'SCAUN': ['SCAUNEL', 'SUPORT', 'SCARITA', 'RADIATOR BAIE'],
     'XILO': ['WILO', 'HILO', 'CIRCULATIE'],
     'WILO': ['XILO', 'HILO', 'CIRCULATIE'],
     'HILO': ['WILO', 'XILO', 'CIRCULATIE'],
@@ -98,6 +98,10 @@ SYNONYMS = {
     'VASE': ['VAS'],
     'EXP': ['EXPANSIUNE'],
     'EXPANSIUNE': ['EXP'],
+    'CONECTOR': ['RACORD', 'ADAPTOR', 'CONECTORI'],
+    'CONECTORI': ['RACORD', 'RACORDURI', 'CONECTOR'],
+    'PARDOSEALA': ['PARDOSEA', 'INCALZIRE PODEA'],
+    'PARDOSEA': ['PARDOSEALA'],
 }
 
 # Construim reverse lookup pentru sinonime
@@ -544,6 +548,78 @@ def search():
                     if c.startswith('VAO'): return 2
                     return 10
                 results.sort(key=lambda r: (get_hidrofor_priority(r['c']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 7: GRUP POMPARE SOLAR DUBLU - TERMO+ prioritar
+        if 'GRUP' in query_upper and 'SOLAR' in query_upper:
+            def get_grup_solar_priority(cod, denumire):
+                c = cod.upper()
+                d = denumire.upper()
+                # DUBLU + TERMO+ = prioritate maxima
+                if 'DUBLU' in d and 'TERMO+' in d:
+                    return 1
+                # GPD = Grup pompare dublu Grundfos
+                if c.startswith('GPD'):
+                    return 2
+                # DUBLU fara TERMO+
+                if 'DUBLU' in d:
+                    return 3
+                if 'TERMO+' in d:
+                    return 4
+                return 10
+            results.sort(key=lambda r: (get_grup_solar_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 8: KIT AERISITOR SOLAR - 63280648 prioritar
+        if ('KIT' in query_upper and 'SOLAR' in query_upper) or ('AERISITOR' in query_upper and 'SOLAR' in query_upper):
+            def get_kit_solar_priority(cod, denumire):
+                c = cod.upper()
+                # 63280648 AERISITOR AUTOMAT SOLAR 3/4 CU PIPA prioritar
+                if '63280648' in c:
+                    return 1
+                if 'AERISITOR' in denumire.upper() and 'SOLAR' in denumire.upper():
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_kit_solar_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 9: VAS EXPANSIUNE SOLAR - VS* prioritar
+        if 'VAS' in query_upper and 'SOLAR' in query_upper:
+            def get_vas_solar_priority(cod, denumire):
+                c = cod.upper()
+                # VS = Vas Solar prioritar
+                if c.startswith('VS'):
+                    return 1
+                if 'SOLAR' in denumire.upper():
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_vas_solar_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 10: SET CONECTORI TEAVA INOX - 63281189 prioritar
+        if 'SET' in query_upper and 'CONECTOR' in query_upper and 'INOX' in query_upper:
+            def get_set_inox_priority(cod, denumire):
+                c = cod.upper()
+                # 63281189 SET RACORD SOLAR DN16 prioritar
+                if '63281189' in c:
+                    return 1
+                if 'SET' in denumire.upper() and 'RACORD' in denumire.upper() and 'SOLAR' in denumire.upper():
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_set_inox_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 11: GRUP POMPARE PARDOSEALA - OTR-WP/OTF-WP/OZR-WP TERMO+ prioritar
+        if 'GRUP' in query_upper and ('PARDOSEALA' in query_upper or 'PARDOSEA' in query_upper or 'PUNCT' in query_upper or 'CAMERA' in query_upper):
+            def get_grup_pardoseala_priority(cod, denumire):
+                c = cod.upper()
+                d = denumire.upper()
+                # OTR-WP, OTF-WP, OZR-WP = Grup pompare punct fix TERMO+ prioritar
+                if (c.startswith('OTR-WP') or c.startswith('OTF-WP') or c.startswith('OZR-WP')) and 'TERMO+' in d:
+                    return 1
+                if c.startswith('OTR') or c.startswith('OTF') or c.startswith('OZR'):
+                    return 2
+                if 'PUNCT FIX' in d and 'TERMO+' in d:
+                    return 3
+                if 'TERMO+' in d:
+                    return 4
+                return 10
+            results.sort(key=lambda r: (get_grup_pardoseala_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
