@@ -406,6 +406,86 @@ def parse_text():
         print(f"Eroare parse-text: {e}")
         return jsonify({"error": str(e)})
 
+def filter_strict_dimensions(query_normalized, results):
+    """
+    FIX v30: FILTRARE STRICTĂ pe dimensiuni SIMPLE vs COMPUSE
+    
+    Problema: "Niplu 1"" găsește "NIPLU 1.1/4"-1" pentru că "1" match-uiește ca substring
+    Soluție: Când query are dimensiune SIMPLĂ (1", ½", ¾") → EXCLUDE dimensiuni COMPUSE
+    
+    Parametri:
+    - query_normalized: Query normalizat (uppercase, fără diacritice)
+    - results: Lista de rezultate după scoring
+    
+    Return:
+    - Lista filtrată de rezultate
+    """
+    import re
+    
+    # Detectează dimensiuni SIMPLE în query
+    has_1_inch = bool(re.search(r'\b1["\']', query_normalized))
+    has_2_inch = bool(re.search(r'\b2["\']', query_normalized))
+    has_3_inch = bool(re.search(r'\b3["\']', query_normalized))
+    has_4_inch = bool(re.search(r'\b4["\']', query_normalized))
+    has_half = bool(re.search(r'\b1/2\b|½', query_normalized))
+    has_three_quarters = bool(re.search(r'\b3/4\b|¾', query_normalized))
+    has_one_quarter = bool(re.search(r'\b1/4\b|¼', query_normalized))
+    
+    # Dacă NU are dimensiuni simple, return nemodificat
+    if not any([has_1_inch, has_2_inch, has_3_inch, has_4_inch, has_half, has_three_quarters, has_one_quarter]):
+        return results
+    
+    # Aplică filtrare bazată pe dimensiunea detectată
+    filtered_results = []
+    
+    for r in results:
+        prod_text = (r['c'] + ' ' + r['d']).upper()
+        exclude = False
+        
+        # Când query are 1" EXACT → exclude produse cu dimensiuni compuse sau fracțiuni
+        if has_1_inch and not has_half and not has_three_quarters and not has_one_quarter:
+            # Exclude 1.1/2, 1.1/4, 1/2, 3/4, dar PERMITE 1" exact
+            if re.search(r'1\.1/[24]|1 1/[24]|1½|1¼', prod_text):
+                exclude = True
+            # Exclude și produse care au DOAR fracțiuni fără 1 întreg
+            elif re.search(r'\b1/[24]\b', prod_text) and not re.search(r'\b1["\']', prod_text):
+                exclude = True
+            # Exclude produse REDUSE (1"-1/2", 1"-3/4") DOAR dacă query NU conține "REDUS" sau "LA"
+            elif 'REDUS' not in query_normalized and 'LA' not in query_normalized:
+                if re.search(r'1["\'][- ]*1/[24]|1["\'][- ]*3/4', prod_text):
+                    exclude = True
+        
+        # Când query are 2" EXACT → exclude dimensiuni compuse
+        if has_2_inch and not has_half:
+            if re.search(r'2\.1/2|2 1/2|2½', prod_text):
+                exclude = True
+        
+        # Când query are ½ sau 1/2 EXPLICIT → păstrează DOAR produse cu 1/2 sau ½
+        if has_half and not has_1_inch:
+            # Trebuie să aibă explicit 1/2 sau ½
+            if not re.search(r'1/2|½', prod_text):
+                exclude = True
+        
+        # Când query are ¾ sau 3/4 EXPLICIT → păstrează DOAR produse cu 3/4 sau ¾
+        if has_three_quarters and not has_1_inch:
+            if not re.search(r'3/4|¾', prod_text):
+                exclude = True
+        
+        # Când query are ¼ sau 1/4 EXPLICIT → păstrează DOAR produse cu 1/4 sau ¼
+        if has_one_quarter and not has_1_inch:
+            if not re.search(r'1/4|¼', prod_text):
+                exclude = True
+        
+        if not exclude:
+            filtered_results.append(r)
+    
+    # Dacă filtrarea a eliminat TOATE produsele → returnează originalul
+    # (evită cazul când nu găsește nimic)
+    if not filtered_results:
+        return results
+    
+    return filtered_results
+
 @app.route('/api/search', methods=['POST'])
 def search():
     """
@@ -1053,6 +1133,11 @@ def search():
             # Doar dacă găsim produse fără ROBINET/CLEMA (ar trebui să existe)
             if results_filtered:
                 results = results_filtered
+        
+        # === FIX v30: FILTRARE FINALĂ STRICTĂ pe dimensiuni SIMPLE vs COMPUSE ===
+        # Aplică-se LA SFÂRȘIT, după toate regulile și sortările
+        # Exclude dimensiuni compuse când query are dimensiuni simple (1", ½", etc)
+        results = filter_strict_dimensions(query_normalized, results)
         
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
