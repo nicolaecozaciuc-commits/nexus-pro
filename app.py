@@ -838,23 +838,51 @@ def search():
         
         # FILTRARE 1: CENTRALA PELETI - Exclude tot ce NU conține "peleti"
         if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
+            # === DEBUG v23: Afișează ce se întâmplă la filtrare ===
+            print(f"🔍 DEBUG FILTRARE CENTRALA: Query='{query}'")
+            print(f"   Înainte filtrare: {len(results)} produse")
+            print(f"   Top 3 înainte:")
+            for i, r in enumerate(results[:3], 1):
+                print(f"      {i}. {r['c']}: {r['d'][:60]}")
+            
             # Păstrează DOAR produse care au "PELETI" sau "PELET" în denumire
             results = [r for r in results if 'PELETI' in r['d'].upper() or 'PELET' in r['d'].upper()]
+            
+            # === DEBUG v23: Afișează rezultatul filtrării ===
+            print(f"   După filtrare: {len(results)} produse")
+            print(f"   Top 3 după:")
+            for i, r in enumerate(results[:3], 1):
+                print(f"      {i}. {r['c']}: {r['d'][:60]}")
         
         # FILTRARE 2: VAS ALBASTRU/HIDROFOR - Prioritizează VAO/VAV, exclude INOX
         if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
             has_albastru = 'ALBASTRU' in query_upper or 'HIDROFOR' in query_upper or 'APA' in query_upper
             
             if has_albastru:
+                # === DEBUG v23: Afișează ce se întâmplă la filtrare vase ===
+                print(f"🔍 DEBUG FILTRARE VAS ALBASTRU: Query='{query}'")
+                print(f"   Înainte filtrare: {len(results)} produse")
+                print(f"   Top 3 înainte:")
+                for i, r in enumerate(results[:3], 1):
+                    print(f"      {i}. {r['c']}: {r['d'][:60]}")
+                
                 # Caută explicit vase albastre (VAO/VAV)
                 vas_albastru = [r for r in results if r['c'].upper().startswith('VAO') or r['c'].upper().startswith('VAV')]
                 
                 if vas_albastru:
                     # Găsit vase albastre → folosește doar pe acestea
                     results = vas_albastru
+                    print(f"   ✓ Găsit {len(vas_albastru)} vase albastre (VAO/VAV)")
                 else:
                     # Fallback: exclude INOX (nu sunt vase expansiune)
                     results = [r for r in results if not r['c'].upper().startswith('INOX')]
+                    print(f"   ✓ Nu găsit VAO/VAV, exclus INOX, rămas {len(results)} produse")
+                
+                # === DEBUG v23: Afișează rezultatul ===
+                print(f"   După filtrare: {len(results)} produse")
+                print(f"   Top 3 după:")
+                for i, r in enumerate(results[:3], 1):
+                    print(f"      {i}. {r['c']}: {r['d'][:60]}")
         
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
