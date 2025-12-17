@@ -415,12 +415,23 @@ def search():
         data = request.json
         query = data.get('query', '').strip()
         
+        # === FIX v25: NORMALIZARE DIACRITICE ROMÂNEȘTI ===
+        # Problema: query-urile vin cu "peleți", "expansiunea", "espansiune"
+        # Soluție: Normalizăm toate diacriticele la caractere simple
+        query_normalized = query.upper()
+        query_normalized = query_normalized.replace('Ț', 'T').replace('Ţ', 'T')
+        query_normalized = query_normalized.replace('Ș', 'S').replace('Ş', 'S')
+        query_normalized = query_normalized.replace('Ă', 'A').replace('Â', 'A').replace('Î', 'I')
+        # Fix greșeli de scriere comune: "espansiune" → "expansiune"
+        query_normalized = query_normalized.replace('ESPANSIUNE', 'EXPANSIUNE')
+        query_normalized = query_normalized.replace('ESPANS', 'EXPANS')
+        
         # === LOG v24: Afișează TOATE query-urile relevante pentru debugging ===
         # Afișăm doar query-uri lungi (>15 caractere) care conțin cuvinte cheie
         if len(query) > 15:
-            query_check = query.upper()
+            query_check = query_normalized  # Folosim query normalizat
             if 'CENTRAL' in query_check or 'PELETI' in query_check or 'VAS' in query_check or 'EXPAN' in query_check:
-                print(f"📥 QUERY LUNG PRIMIT: '{query}'")
+                print(f"📥 QUERY LUNG PRIMIT: '{query}' → NORMALIZAT: '{query_normalized}'")
                 print(f"   Lungime: {len(query)} caractere")
         
         if not query or len(query) < 2:
@@ -438,10 +449,10 @@ def search():
             matched_words = query_words & prod['words']
             
             # Cautare substring in cod si denumire (pentru coduri ca R470AX003)
-            query_upper = query.upper()
+            # FIX v25: Folosim query_normalized în loc de query_normalized
             substring_match = False
-            if len(query_upper) >= 3:
-                if query_upper in prod['c'].upper() or query_upper in prod['d'].upper():
+            if len(query_normalized) >= 3:
+                if query_normalized in prod['c'].upper() or query_normalized in prod['d'].upper():
                     substring_match = True
             
             if not matched_words and not substring_match:
@@ -495,7 +506,7 @@ def search():
             # Când utilizatorul caută "centrala peleti", sistemul trebuie să prioritizeze
             # centrale pe peleți față de alte produse (ex: kit-uri GPL) chiar dacă acestea
             # au match mai bun pe dimensiuni
-            if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
+            if 'CENTRALA' in query_normalized and 'PELETI' in query_normalized:
                 prod_upper = prod['d'].upper()
                 if 'CENTRALA' in prod_upper and 'PELETI' in prod_upper:
                     score *= 100  # x100 pentru a GARANTA că depășește orice alt match
@@ -511,14 +522,14 @@ def search():
         results.sort(key=lambda x: (-x['ratio'], -x['score']))
         
         # REGULA SPECIALA 1: Radiatoare OTEL - prioritate TERMO+ si 22K
-        query_upper = query.upper()
-        is_radiator_query = ('RADIATOR' in query_upper or 'CALORIFER' in query_upper) and 'OTEL' in query_upper
-        is_scarita_query = 'SCARIT' in query_upper or 'SCARA' in query_upper or ('BAIE' in query_upper and ('RADIATOR' in query_upper or '600' in query_upper))
+        # FIX v25: query_normalized e deja definit la început cu normalizare diacritice
+        is_radiator_query = ('RADIATOR' in query_normalized or 'CALORIFER' in query_normalized) and 'OTEL' in query_normalized
+        is_scarita_query = 'SCARIT' in query_normalized or 'SCARA' in query_normalized or ('BAIE' in query_normalized and ('RADIATOR' in query_normalized or '600' in query_normalized))
         
         if is_radiator_query or is_scarita_query:
             # Verifica daca NU e specificat 11 sau 33
-            has_11 = '11K' in query_upper or ' 11 ' in query_upper or query_upper.endswith(' 11')
-            has_33 = '33K' in query_upper or ' 33 ' in query_upper or query_upper.endswith(' 33')
+            has_11 = '11K' in query_normalized or ' 11 ' in query_normalized or query_normalized.endswith(' 11')
+            has_33 = '33K' in query_normalized or ' 33 ' in query_normalized or query_normalized.endswith(' 33')
             
             def is_termo_plus(denumire):
                 return 'TERMO+' in denumire.upper() or 'TERMO +' in denumire.upper()
@@ -536,9 +547,9 @@ def search():
             results = results_termo_22k + results_termo + results_22k + results_other
         
         # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
-        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
-            has_boiler = 'BOILER' in query_upper or 'CENTRALA' in query_upper or 'TERMIC' in query_upper
-            has_hidrofor = 'HIDROFOR' in query_upper or 'POMPARE' in query_upper or 'APA' in query_upper
+        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
+            has_boiler = 'BOILER' in query_normalized or 'CENTRALA' in query_normalized or 'TERMIC' in query_normalized
+            has_hidrofor = 'HIDROFOR' in query_normalized or 'POMPARE' in query_normalized or 'APA' in query_normalized
             
             def get_vas_priority(cod, denumire):
                 c = cod.upper()
@@ -573,7 +584,7 @@ def search():
             results.sort(key=lambda r: (get_vas_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 3: Pompe WILO/HILO/XILO - YONOS PICO 1.0 prioritar
-        if any(x in query_upper for x in ['WILO', 'HILO', 'XILO', 'POMPA', 'CIRCULATIE']):
+        if any(x in query_normalized for x in ['WILO', 'HILO', 'XILO', 'POMPA', 'CIRCULATIE']):
             def get_pompa_priority(cod, denumire):
                 d = denumire.upper()
                 # YONOS PICO 1.0 prioritar
@@ -589,14 +600,14 @@ def search():
             results.sort(key=lambda r: (get_pompa_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 4: Cand cauta explicit "TERMO+" -> prioritar TERMO+
-        if 'TERMO+' in query_upper or 'TERMO +' in query_upper:
+        if 'TERMO+' in query_normalized or 'TERMO +' in query_normalized:
             def has_termo_plus(denumire):
                 d = denumire.upper()
                 return 'TERMO+' in d or 'TERMO +' in d
             results.sort(key=lambda r: (0 if has_termo_plus(r['d']) else 1, -r.get('score', 0)))
         
         # REGULA SPECIALA 5: PUFFER - TERMO+ cu METAL+INOX prioritar
-        if 'PUFFER' in query_upper:
+        if 'PUFFER' in query_normalized:
             def get_puffer_priority(cod, denumire):
                 d = denumire.upper()
                 c = cod.upper()
@@ -613,7 +624,7 @@ def search():
             results.sort(key=lambda r: (get_puffer_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 6: KIT TUR-RETUR - R470X001 prioritar
-        if ('KIT' in query_upper or 'SET' in query_upper) and 'TUR' in query_upper and 'RETUR' in query_upper:
+        if ('KIT' in query_normalized or 'SET' in query_normalized) and 'TUR' in query_normalized and 'RETUR' in query_normalized:
             def get_kit_tur_retur_priority(cod, denumire):
                 c = cod.upper()
                 if 'R470X001' in c or 'R470AX001' in c:
@@ -624,7 +635,7 @@ def search():
             results.sort(key=lambda r: (get_kit_tur_retur_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 7: GRUP SOLAR/POMPARE SOLAR - GPD212 GRUNDFOS prioritar
-        if 'GRUP' in query_upper and ('SOLAR' in query_upper or 'POMPARE' in query_upper):
+        if 'GRUP' in query_normalized and ('SOLAR' in query_normalized or 'POMPARE' in query_normalized):
             def get_grup_solar_priority(cod, denumire):
                 c = cod.upper()
                 d = denumire.upper()
@@ -637,7 +648,7 @@ def search():
             results.sort(key=lambda r: (get_grup_solar_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 8: KIT AERISITOR SOLAR - 63280648 cu pipa prioritar
-        if ('KIT' in query_upper or 'SET' in query_upper) and 'AERISITOR' in query_upper and 'SOLAR' in query_upper:
+        if ('KIT' in query_normalized or 'SET' in query_normalized) and 'AERISITOR' in query_normalized and 'SOLAR' in query_normalized:
             def get_kit_aerisitor_priority(cod, denumire):
                 c = cod.upper()
                 d = denumire.upper()
@@ -650,7 +661,7 @@ def search():
             results.sort(key=lambda r: (get_kit_aerisitor_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 9: VAS SOLAR - VS* prioritar
-        if 'VAS' in query_upper and 'SOLAR' in query_upper:
+        if 'VAS' in query_normalized and 'SOLAR' in query_normalized:
             def get_vas_solar_priority(cod, denumire):
                 c = cod.upper()
                 # VS12, VS18, VS24 = Vase solare prioritare
@@ -662,7 +673,7 @@ def search():
             results.sort(key=lambda r: (get_vas_solar_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 10: SET CONECTORI INOX 16 - 63281189 prioritar
-        if ('SET' in query_upper or 'KIT' in query_upper) and 'CONECTOR' in query_upper and ('16' in query or 'INOX' in query_upper):
+        if ('SET' in query_normalized or 'KIT' in query_normalized) and 'CONECTOR' in query_normalized and ('16' in query or 'INOX' in query_normalized):
             def get_set_conectori_priority(cod, denumire):
                 c = cod.upper()
                 # 63281189 = Set conectori inox 16 prioritar
@@ -674,7 +685,7 @@ def search():
             results.sort(key=lambda r: (get_set_conectori_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 11: GRUP PARDOSEALA - OTR-WP/OTF-WP/OZR-WP TERMO+ prioritar
-        if 'GRUP' in query_upper and ('PARDOSEALA' in query_upper or 'PARDOSEA' in query_upper):
+        if 'GRUP' in query_normalized and ('PARDOSEALA' in query_normalized or 'PARDOSEA' in query_normalized):
             def get_grup_pardoseala_priority(cod, denumire):
                 c = cod.upper()
                 d = denumire.upper()
@@ -689,7 +700,7 @@ def search():
             results.sort(key=lambda r: (get_grup_pardoseala_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 12: TERMOMANOMETRU - THMTAA prioritar
-        if 'TERMOMANOMETRU' in query_upper or 'TERMO MANOMETRU' in query_upper:
+        if 'TERMOMANOMETRU' in query_normalized or 'TERMO MANOMETRU' in query_normalized:
             def get_termomanometru_priority(cod, denumire):
                 c = cod.upper()
                 # THMTAA = Termomanometru axial prioritar
@@ -701,7 +712,7 @@ def search():
             results.sort(key=lambda r: (get_termomanometru_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 13: ROBINET CU CANEA/MANETA - ASTER prioritar
-        if 'ROBINET' in query_upper and ('CANEA' in query_upper or 'MANETA' in query_upper):
+        if 'ROBINET' in query_normalized and ('CANEA' in query_normalized or 'MANETA' in query_normalized):
             def get_robinet_canea_priority(cod, denumire):
                 d = denumire.upper()
                 # ASTER prioritar daca nu specifica FF sau MF
@@ -713,7 +724,7 @@ def search():
             results.sort(key=lambda r: (get_robinet_canea_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 14: OLANDEZ BRONZ/ALAMA - OLDR* prioritar
-        if 'OLANDEZ' in query_upper and ('BRONZ' in query_upper or 'ALAMA' in query_upper):
+        if 'OLANDEZ' in query_normalized and ('BRONZ' in query_normalized or 'ALAMA' in query_normalized):
             def get_olandez_priority(cod, denumire):
                 c = cod.upper()
                 # OLDR = Olandez drept prioritar
@@ -723,7 +734,7 @@ def search():
             results.sort(key=lambda r: (get_olandez_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 15: FILTRU Y - Y* ECO prioritar
-        if 'FILTRU' in query_upper and 'Y' in query_upper:
+        if 'FILTRU' in query_normalized and 'Y' in query_normalized:
             def get_filtru_y_priority(cod, denumire):
                 c = cod.upper()
                 d = denumire.upper()
@@ -736,7 +747,7 @@ def search():
             results.sort(key=lambda r: (get_filtru_y_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 16: AERISITOR AUTOMAT GIACOMINI - R88IY003 prioritar
-        if 'AERISITOR' in query_upper and 'GIACOMINI' in query_upper:
+        if 'AERISITOR' in query_normalized and 'GIACOMINI' in query_normalized:
             def get_aerisitor_giacomini_priority(cod, denumire):
                 c = cod.upper()
                 # R88IY003 = Aerisitor automat de coloana Giacomini prioritar
@@ -748,7 +759,7 @@ def search():
             results.sort(key=lambda r: (get_aerisitor_giacomini_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 17: SUPORT VAS - SUPORT PERETE VASE EXP prioritar
-        if 'SUPORT' in query_upper and 'VAS' in query_upper:
+        if 'SUPORT' in query_normalized and 'VAS' in query_normalized:
             def get_suport_vas_priority(cod, denumire):
                 d = denumire.upper()
                 c = cod.upper()
@@ -761,7 +772,7 @@ def search():
             results.sort(key=lambda r: (get_suport_vas_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 18: CENTRALA PELETI - autocuratire prioritar
-        if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
+        if 'CENTRALA' in query_normalized and 'PELETI' in query_normalized:
             def get_centrala_peleti_priority(cod, denumire):
                 d = denumire.upper()
                 # AUTOCURATIRE prioritar
@@ -773,12 +784,12 @@ def search():
             results.sort(key=lambda r: (get_centrala_peleti_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 19: NIPLU/REDUCTIE mari (>=1½") - ZN (zincate) prioritar
-        if ('NIPLU' in query_upper or 'REDUCTIE' in query_upper or 'REDUS' in query_upper):
+        if ('NIPLU' in query_normalized or 'REDUCTIE' in query_normalized or 'REDUS' in query_normalized):
             # Verifică dacă sunt dimensiuni mari (1½" sau 2")
-            has_large_dim = any(x in query_upper for x in ['1 1/2', '1½', '1 1 2', '2"', '2 ', ' 2'])
+            has_large_dim = any(x in query_normalized for x in ['1 1/2', '1½', '1 1 2', '2"', '2 ', ' 2'])
             # Verifică dacă NU specifică alama/eco
-            has_alama = 'ALAMA' in query_upper or 'BRONZ' in query_upper
-            has_eco = 'ECO' in query_upper
+            has_alama = 'ALAMA' in query_normalized or 'BRONZ' in query_normalized
+            has_eco = 'ECO' in query_normalized
             
             if has_large_dim and not has_alama and not has_eco:
                 def get_niplu_zn_priority(cod, denumire):
@@ -793,8 +804,8 @@ def search():
                 results.sort(key=lambda r: (get_niplu_zn_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # REGULA SPECIALA 20: VAS EXPANSIUNE - VRV > VR > VRW (rafinare pentru vase roșii)
-        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
-            has_hidrofor = 'HIDROFOR' in query_upper or 'APA' in query_upper
+        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
+            has_hidrofor = 'HIDROFOR' in query_normalized or 'APA' in query_normalized
             
             if not has_hidrofor:
                 # Pentru încălzire/generale: VRV > VR > VRW
@@ -811,7 +822,7 @@ def search():
                 results.sort(key=lambda r: (get_vas_rosu_priority(r['c']), -r.get('score', 0)))
         
         # REGULA SPECIALA 21: GRUP SIGURANTA - HERZ prioritar
-        if 'GRUP' in query_upper and ('SIGURANTA' in query_upper or 'SIG' in query_upper):
+        if 'GRUP' in query_normalized and ('SIGURANTA' in query_normalized or 'SIG' in query_normalized):
             def get_grup_siguranta_priority(cod, denumire):
                 d = denumire.upper()
                 c = cod.upper()
@@ -825,8 +836,8 @@ def search():
         
         # REGULA SPECIALA 22: VAS ALBASTRU/HIDROFOR - VAO/VAV prioritar peste INOX
         # FIX v21: Când caută "vas albastru" sau "vas hidrofor" → prioritate vase albastre (VAO/VAV)
-        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
-            has_albastru = 'ALBASTRU' in query_upper or 'HIDROFOR' in query_upper or 'APA' in query_upper
+        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
+            has_albastru = 'ALBASTRU' in query_normalized or 'HIDROFOR' in query_normalized or 'APA' in query_normalized
             
             if has_albastru:
                 def get_vas_albastru_priority(cod, denumire):
@@ -845,7 +856,7 @@ def search():
         # === FIX v22: FILTRĂRI FINALE pentru cazuri problemă ===
         
         # FILTRARE 1: CENTRALA PELETI - Exclude tot ce NU conține "peleti"
-        if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
+        if 'CENTRALA' in query_normalized and 'PELETI' in query_normalized:
             # === DEBUG v23: Afișează ce se întâmplă la filtrare ===
             print(f"🔍 DEBUG FILTRARE CENTRALA: Query='{query}'")
             print(f"   Înainte filtrare: {len(results)} produse")
@@ -863,8 +874,8 @@ def search():
                 print(f"      {i}. {r['c']}: {r['d'][:60]}")
         
         # FILTRARE 2: VAS ALBASTRU/HIDROFOR - Prioritizează VAO/VAV, exclude INOX
-        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
-            has_albastru = 'ALBASTRU' in query_upper or 'HIDROFOR' in query_upper or 'APA' in query_upper
+        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
+            has_albastru = 'ALBASTRU' in query_normalized or 'HIDROFOR' in query_normalized or 'APA' in query_normalized
             
             if has_albastru:
                 # === DEBUG v23: Afișează ce se întâmplă la filtrare vase ===
