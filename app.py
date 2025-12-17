@@ -999,6 +999,18 @@ def search():
                 for i, r in enumerate(results[:3], 1):
                     print(f"      {i}. {r['c']}: {r['d'][:60]}")
         
+        # FILTRARE 3: RACORD PPR - Exclude produse cu ROBINET
+        # FIX v28: Când caută "RACORD PPR" → exclude produse cu "ROBINET" în denumire
+        # Problema: "ROBINET CU TERMOMETRU SI RACORD PENTRU POMPA" conține cuvântul RACORD
+        # și are scor mare, dar nu e un RACORD PPR ci un ROBINET
+        if 'RACORD' in query_normalized and 'PPR' in query_normalized:
+            # Exclude produse care au "ROBINET" în denumire
+            results_filtered = [r for r in results if 'ROBINET' not in r['d'].upper()]
+            
+            # Doar dacă găsim produse fără ROBINET (ar trebui să existe)
+            if results_filtered:
+                results = results_filtered
+        
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
         
