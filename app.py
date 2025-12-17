@@ -444,8 +444,11 @@ def filter_strict_dimensions(query_normalized, results):
         
         # Când query are 1" EXACT → exclude produse cu dimensiuni compuse sau fracțiuni
         if has_1_inch and not has_half and not has_three_quarters and not has_one_quarter:
-            # Exclude 1.1/2, 1.1/4, 1/2, 3/4, dar PERMITE 1" exact
-            if re.search(r'1\.1/[24]|1 1/[24]|1½|1¼', prod_text):
+            # === FIX v31: Regex COMPLET pentru TOATE variațiile de scriere ===
+            # Exclude: 1.1/2, 1 1/2, 1'1/2, 1''1/2, 1"1/2, 1½
+            # Exclude: 1.1/4, 1 1/4, 1'1/4, 1''1/4, 1"1/4, 1¼
+            # Pattern: 1['\"]+ ?1/[24] match-uiește 1 sau mai multe apostrofuri/ghilimele + spațiu opțional
+            if re.search(r'1\.1/[24]|1 1/[24]|1["\']+ ?1/[24]|1½|1¼', prod_text):
                 exclude = True
             # Exclude și produse care au DOAR fracțiuni fără 1 întreg
             elif re.search(r'\b1/[24]\b', prod_text) and not re.search(r'\b1["\']', prod_text):
@@ -1133,6 +1136,40 @@ def search():
             # Doar dacă găsim produse fără ROBINET/CLEMA (ar trebui să existe)
             if results_filtered:
                 results = results_filtered
+        
+        # === FIX v31: PRE-FILTRARE STRICTĂ pe TIP PRODUS ===
+        # Problema: "Niplu 1\" ZN" găsește "MUFA ZN" pentru că ambele conțin "ZN"
+        # Soluție: Când query conține TIP specific (NIPLU, DOP, etc) → păstrează DOAR acel tip
+        
+        # Lista de tipuri specifice care necesită pre-filtrare
+        product_types = {
+            'NIPLU': 'NIPLU',
+            'DOP': 'DOP',
+            'REDUCTIE': 'REDUCT',  # Match și REDUCTIE, REDUCER, etc
+            'REDUS': 'REDUCT',
+            'MUFA': 'MUFA',
+            'COT': 'COT',
+            'TEU': 'TEU',
+            'FILTRU': 'FILTRU',
+            'SUPAPA': 'SUPAPA',
+            'ROBINET': 'ROBINET',
+            'VANA': 'VANA',
+        }
+        
+        # Detectează tipul de produs în query
+        detected_type = None
+        for query_word, search_pattern in product_types.items():
+            if query_word in query_normalized:
+                detected_type = search_pattern
+                break
+        
+        # Dacă detectat tip specific → filtrare STRICTĂ
+        if detected_type:
+            results_with_type = [r for r in results if detected_type in r['d'].upper()]
+            # Doar dacă găsește produse de tipul corect
+            if results_with_type:
+                results = results_with_type
+                print(f"🔍 PRE-FILTRARE v31: Query conține '{detected_type}' → păstrate {len(results)} produse")
         
         # === FIX v30: FILTRARE FINALĂ STRICTĂ pe dimensiuni SIMPLE vs COMPUSE ===
         # Aplică-se LA SFÂRȘIT, după toate regulile și sortările
