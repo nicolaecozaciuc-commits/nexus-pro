@@ -412,6 +412,9 @@ def search():
     Returneaza JSON: [ { "d": "Robinet...", "c": "123" }, ... ]
     """
     try:
+        # === FIX v27: Import re pentru regex în reguli ===
+        import re
+        
         data = request.json
         query = data.get('query', '').strip()
         
@@ -904,7 +907,6 @@ def search():
         # FIX v26: "Olandez PPR 32" → caută 32x32, nu 32x1
         if 'OLANDEZ' in query_normalized and 'PPR' in query_normalized:
             # Extrage dimensiunea (20, 25, 32, 40, 50)
-            import re
             ppr_dims = re.findall(r'\b(20|25|32|40|50)\b', query_normalized)
             if len(ppr_dims) == 1:
                 dim = ppr_dims[0]
@@ -927,7 +929,6 @@ def search():
         # FIX v26: "Reducție 1½la 1" → 1.5"x1", nu 1.25"x1"
         if ('REDUCTIE' in query_normalized or 'REDUS' in query_normalized or 'NIPLU' in query_normalized):
             # Extrage toate dimensiunile din query
-            import re
             # Caută pattern-uri precum 1.5, 1/2, 3/4, etc
             dims_in_query = set()
             # Dimensiuni cu punct (1.5)
