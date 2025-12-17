@@ -415,6 +415,14 @@ def search():
         data = request.json
         query = data.get('query', '').strip()
         
+        # === LOG v24: Afișează TOATE query-urile relevante pentru debugging ===
+        # Afișăm doar query-uri lungi (>15 caractere) care conțin cuvinte cheie
+        if len(query) > 15:
+            query_check = query.upper()
+            if 'CENTRAL' in query_check or 'PELETI' in query_check or 'VAS' in query_check or 'EXPAN' in query_check:
+                print(f"📥 QUERY LUNG PRIMIT: '{query}'")
+                print(f"   Lungime: {len(query)} caractere")
+        
         if not query or len(query) < 2:
             return jsonify([])
         
