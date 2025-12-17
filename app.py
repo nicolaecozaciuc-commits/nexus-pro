@@ -346,9 +346,7 @@ def search():
                 score *= 1.1  # Bonus 10% pentru produse cu rulaj
             
             # Bonus pentru dimensiuni EXACTE (ex: 600x600 gaseste 600X600 primul)
-            # Fix: elimina punctele din numere (1.000 -> 1000)
-            query_for_dims = re.sub(r'(\d)\.(\d)', r'\1\2', query.upper())
-            query_nums_list = re.findall(r'\d+', query_for_dims)
+            query_nums_list = re.findall(r'\d+', query.upper())
             if len(query_nums_list) >= 2:
                 query_dims = ''.join(query_nums_list)  # "600600"
                 prod_dims = re.sub(r'[^0-9]', '', prod['d'].upper())  # extrage toate numerele
@@ -551,6 +549,83 @@ def search():
     except Exception as e:
         print(f"Eroare search: {e}")
         return jsonify([])
+
+# --- CHEIA OPENAI (stocata pe server) ---
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
+# Daca nu e in environment, citeste din fisier
+if not OPENAI_API_KEY:
+    try:
+        with open('/root/nexus-pro/.openai_key', 'r') as f:
+            OPENAI_API_KEY = f.read().strip()
+    except:
+        pass
+
+@app.route('/api/ocr-openai', methods=['POST'])
+def ocr_openai():
+    """
+    API endpoint pentru OCR cu OpenAI GPT-4o.
+    Primește JSON: { "image": "base64_string" }
+    Returnează JSON: { "items": [{ "text": "...", "qty": 1 }] }
+    """
+    try:
+        if not OPENAI_API_KEY:
+            return jsonify({"error": "OpenAI API key not configured on server"})
+        
+        data = request.json
+        image_base64 = data.get('image', '')
+        
+        if not image_base64:
+            return jsonify({"error": "No image provided"})
+        
+        # Call OpenAI API
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "gpt-4o",
+            "temperature": 0,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Extrage TOATE produsele din aceasta imagine. REGULI: 1) Extrage FIECARE linie care contine un produs, NU sari peste nicio linie. 2) Daca e o lista scrisa de mana sau tiparita, extrage TOATE elementele de la PRIMA pana la ULTIMA linie. 3) Daca vezi un titlu/categorie urmat de dimensiuni, combina-le. 4) Cantitatea poate fi 'buc', 'bucati', un numar, sau la sfarsitul liniei. 5) Daca nu vezi cantitate explicita, pune qty: 1. 6) Include CENTRALE, PUFFER, BOILER, POMPE - sunt produse importante! 7) ATENTIE LA CIFRE SCRISE DE MANA: 0 nu e 6, 8 nu e 9, 1 nu e 7, 00 nu e 06. Verifica de doua ori numerele! Raspunde DOAR cu JSON valid. Format: { \"items\": [{ \"text\": \"nume produs complet\", \"qty\": cantitate_numar }] }"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                    }
+                ]
+            }],
+            "response_format": {"type": "json_object"}
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        
+        result = response.json()
+        
+        if 'error' in result:
+            return jsonify({"error": result['error'].get('message', 'OpenAI error')})
+        
+        content = result['choices'][0]['message']['content']
+        content = content.replace('```json', '').replace('```', '').strip()
+        parsed = json.loads(content)
+        
+        return jsonify(parsed)
+        
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "Timeout - procesarea durează prea mult"})
+    except Exception as e:
+        print(f"Eroare OCR OpenAI: {e}")
+        return jsonify({"error": str(e)})
 
 @app.route('/api/ocr', methods=['POST'])
 def ocr():
