@@ -483,13 +483,14 @@ def search():
                     score *= 3  # Bonus mare pentru match exact dimensiuni
             
             # === FIX v20: BOOST MASIV pentru centrale peleți ===
+            # === FIX v21: Cresc BOOST de la x20 la x100 ===
             # Când utilizatorul caută "centrala peleti", sistemul trebuie să prioritizeze
             # centrale pe peleți față de alte produse (ex: kit-uri GPL) chiar dacă acestea
             # au match mai bun pe dimensiuni
             if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
                 prod_upper = prod['d'].upper()
                 if 'CENTRALA' in prod_upper and 'PELETI' in prod_upper:
-                    score *= 20  # x20 pentru a depăși match-uri pe alte criterii
+                    score *= 100  # x100 pentru a GARANTA că depășește orice alt match
             
             results.append({
                 'd': prod['d'],
@@ -813,6 +814,25 @@ def search():
                     return 2
                 return 10
             results.sort(key=lambda r: (get_grup_siguranta_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 22: VAS ALBASTRU/HIDROFOR - VAO/VAV prioritar peste INOX
+        # FIX v21: Când caută "vas albastru" sau "vas hidrofor" → prioritate vase albastre (VAO/VAV)
+        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
+            has_albastru = 'ALBASTRU' in query_upper or 'HIDROFOR' in query_upper or 'APA' in query_upper
+            
+            if has_albastru:
+                def get_vas_albastru_priority(cod, denumire):
+                    c = cod.upper()
+                    d = denumire.upper()
+                    # VAO/VAV = vase albastre (hidrofor) prioritare
+                    if c.startswith('VAO') or c.startswith('VAV'):
+                        return 1
+                    # Excludem INOX (care nu sunt vase expansiune)
+                    if c.startswith('INOX') or 'INOX' in c[:10]:
+                        return 10
+                    return 5
+                
+                results.sort(key=lambda r: (get_vas_albastru_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
