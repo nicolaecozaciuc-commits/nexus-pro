@@ -426,6 +426,17 @@ def search():
         query_normalized = query_normalized.replace('ESPANSIUNE', 'EXPANSIUNE')
         query_normalized = query_normalized.replace('ESPANS', 'EXPANS')
         
+        # === FIX v26: NORMALIZARE DIMENSIUNI PPR ===
+        # PPR folosește dimensiuni standard: 20, 25, 32, 40, 50
+        # "3ex1" trebuie interpretat ca "32x1", "2ex" ca "25", etc
+        query_normalized = query_normalized.replace('5EX', '50X')
+        query_normalized = query_normalized.replace('4EX', '40X')
+        query_normalized = query_normalized.replace('3EX', '32X')
+        query_normalized = query_normalized.replace('2EX', '25X')
+        # Fix și pentru 1½ (1.5 inch)
+        query_normalized = query_normalized.replace('1½', '1.5')
+        query_normalized = query_normalized.replace('1 1/2', '1.5')
+        
         # === LOG v24: Afișează TOATE query-urile relevante pentru debugging ===
         # Afișăm doar query-uri lungi (>15 caractere) care conțin cuvinte cheie
         if len(query) > 15:
@@ -852,6 +863,90 @@ def search():
                     return 5
                 
                 results.sort(key=lambda r: (get_vas_albastru_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 23: ROBINET CU OLANDEZ - EFCO/COLLETTORE prioritar
+        # FIX v26: Pentru robinete cu olandez → prioritate EFCO și COLLETTORE
+        if 'ROBINET' in query_normalized and 'OLANDEZ' in query_normalized:
+            def get_robinet_olandez_priority(cod, denumire):
+                c = cod.upper()
+                d = denumire.upper()
+                # EFCO prioritar
+                if 'EFCO' in c or 'EFCO' in d:
+                    return 1
+                # COLLETTORE prioritar
+                if 'COLLETTORE' in d:
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_robinet_olandez_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 24: PPR FARA CULOARE - ALB prioritar
+        # FIX v26: Când caută PPR fără să specifice culoare → prioritate ALB (exclude gri/verde)
+        if 'PPR' in query_normalized:
+            has_verde = 'VERDE' in query_normalized
+            has_gri = 'GRI' in query_normalized
+            has_alb = 'ALB' in query_normalized
+            
+            # Dacă NU specifică culoare → prioritate ALB
+            if not has_verde and not has_gri and not has_alb:
+                def get_ppr_alb_priority(cod, denumire):
+                    d = denumire.upper()
+                    # ALB prioritar
+                    if 'ALB' in d:
+                        return 1
+                    # Exclude VERDE și GRI
+                    if 'VERDE' in d or 'GRI' in d:
+                        return 10
+                    # Neutru (fără culoare specificată în denumire)
+                    return 5
+                results.sort(key=lambda r: (get_ppr_alb_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 25: OLANDEZ PPR - când e singură dimensiune → caută XXxXX
+        # FIX v26: "Olandez PPR 32" → caută 32x32, nu 32x1
+        if 'OLANDEZ' in query_normalized and 'PPR' in query_normalized:
+            # Extrage dimensiunea (20, 25, 32, 40, 50)
+            import re
+            ppr_dims = re.findall(r'\b(20|25|32|40|50)\b', query_normalized)
+            if len(ppr_dims) == 1:
+                dim = ppr_dims[0]
+                # Caută produse cu XXxXX (ex: 32x32)
+                def get_olandez_ppr_priority(cod, denumire):
+                    c = cod.upper()
+                    d = denumire.upper()
+                    pattern = f'{dim}X{dim}'
+                    if pattern in c or pattern in d or f'{dim}X{dim}' in d:
+                        return 1
+                    # Exclude dimensiuni diferite (ex: 32x1)
+                    if f'{dim}X' in c or f'{dim}X' in d:
+                        other_dim = re.search(f'{dim}X(\\d+)', c + d)
+                        if other_dim and other_dim.group(1) != dim:
+                            return 10
+                    return 5
+                results.sort(key=lambda r: (get_olandez_ppr_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 26: REDUCTIE/NIPLU REDUS - match precis dimensiuni
+        # FIX v26: "Reducție 1½la 1" → 1.5"x1", nu 1.25"x1"
+        if ('REDUCTIE' in query_normalized or 'REDUS' in query_normalized or 'NIPLU' in query_normalized):
+            # Extrage toate dimensiunile din query
+            import re
+            # Caută pattern-uri precum 1.5, 1/2, 3/4, etc
+            dims_in_query = set()
+            # Dimensiuni cu punct (1.5)
+            dims_in_query.update(re.findall(r'\d+\.\d+', query_normalized))
+            # Dimensiuni întregi
+            dims_in_query.update(re.findall(r'\b[1-4]\b', query_normalized))
+            
+            if len(dims_in_query) >= 2:
+                # Are cel puțin 2 dimensiuni → match exact
+                def get_reductie_priority(cod, denumire):
+                    text = (cod + ' ' + denumire).upper()
+                    # Verifică dacă TOATE dimensiunile din query apar în produs
+                    matches = sum(1 for dim in dims_in_query if dim in text)
+                    if matches == len(dims_in_query):
+                        return 1
+                    elif matches > 0:
+                        return 5
+                    return 10
+                results.sort(key=lambda r: (get_reductie_priority(r['c'], r['d']), -r.get('score', 0)))
         
         # === FIX v22: FILTRĂRI FINALE pentru cazuri problemă ===
         
