@@ -1,3 +1,16 @@
+"""
+NEXUS PRO SERVER v32 - v2.0 + Fix-uri v31
+-----------------------------------------------------------------
+Îmbunătățiri față de v2.0:
+1. PRE-FILTRARE strictă pe TIP produs (NIPLU exclude MUFA)
+2. FILTRARE dimensiuni cu regex complet (1''1/4, 1"1/4, etc)
+3. Sinonime corecte + normalizări (TEU→TEI, 3ex→32x, etc)
+4. Reguli prioritare (TERMO+, 22K, VR, WILO)
+
+Autor: Nexus Team + Claude v31 fixes
+Data: Decembrie 2025
+"""
+
 import os
 import re
 import json
@@ -5,351 +18,283 @@ import requests
 import pandas as pd
 from collections import Counter
 from flask import Flask, render_template, request, jsonify
+from unidecode import unidecode
 
 app = Flask(__name__)
 
-# --- CONFIGURARE GLOBALA ---
-PRODUCTS_DB = []
-WORD_FREQ = Counter()
-RULAJ_DB = {}  # Dictionar cu rulaj produse: {cod: cantitate_vanduta}
+# --- CONFIGURAȚIE ---
+OLLAMA_API_URL = 'http://127.0.0.1:11434/api/generate'
+OLLAMA_MODEL = 'llava:7b'
 
-# SINONIME pentru domeniul instalatii sanitare/termice
+# Structuri de date globale
+PRODUCTS_DB = []
+RULAJ_DB = {}
+WORD_FREQ = Counter()
+
+# --- SINONIME CORECTE (din v31) ---
 SYNONYMS = {
     # Produse principale
     'CALORIFER': ['RADIATOR', 'ELEMENT', 'CORP'],
     'RADIATOR': ['CALORIFER', 'ELEMENT', 'CORP'],
-    'SCARITA': ['RADIATOR BAIE', 'PORTPROSOP'],
-    'SCARA': ['RADIATOR BAIE', 'PORTPROSOP'],
+    'SCARITA': ['RADIATOR BAIE', 'SCARA', 'PORTPROSOP'],
+    'SCARA': ['RADIATOR BAIE', 'SCARITA', 'PORTPROSOP'],
     'TEAVA': ['TIANA', 'TIGANA', 'CONDUCTA', 'TUB'],
     'TIANA': ['TEAVA', 'TIGANA', 'CONDUCTA'],
-    'TIGANA': ['TEAVA', 'TIANA'],
+    'TIGANA': ['TEAVA', 'TIANA', 'CONDUCTA'],
     'ROBINET': ['VANA', 'VENTIL'],
-    'ROSET': ['ROBINET'],
-    'ROBICT': ['ROBINET'],
     'BOILER': ['BOLER', 'REZERVOR', 'ACM'],
-    'BOLER': ['BOILER', 'REZERVOR'],
+    'PUFFER': ['ACUMULATOR', 'REZERVOR'],
     
     # Materiale
     'OTEL': ['FE', 'FIER', 'METAL'],
     'ALAMA': ['BRONZ', 'BRASS'],
-    'BRONZ': ['ALAMA', 'BRASS'],
-    'CANEA': ['MANETA', 'MANER'],
-    'MANETA': ['CANEA', 'MANER'],
-    'CUPRU': ['CU'],
-    'PPR': ['POLIPROPILENA'],
-    'PEX': ['PEXA', 'PE'],
-    'ZINC': ['ZINT', 'ZINCAT', 'ZN'],
-    'ZINT': ['ZINC', 'ZINCAT', 'ZN'],
-    'ZN': ['ZINC', 'ZINT', 'ZINCAT'],
+    'PPR': ['PP-R', 'POLIPROPILENA'],
+    'PEX': ['PE-X', 'PE-XA'],
     
-    # Dimensiuni - TOL = 1 inch
-    'TOL': ['INCH', 'TOLI'],
-    
-    # Tipuri conexiuni
-    'MF': ['M/F'],
-    'FF': ['F/F'],
-    'MM': ['M/M'],
-    'FE': ['FILET EXTERIOR', 'TATA'],
-    'FI': ['FILET INTERIOR', 'MAMA'],
-    
-    # Accesorii
-    'COT': ['COLT', 'CURBA'],
-    'TEU': ['T', 'RAMIFICATIE', 'TRU', 'TEI'],  # FIX v29: TRU și TEI sunt greșeli comune
-    'TRU': ['TEU', 'T'],  # FIX v29: TRU = TEU (greșeală de scriere)
-    'TEI': ['TEU', 'T'],  # FIX v29: TEI = TEU (greșeală de scriere)
-    'MUFA': ['CUPLAJ'],
-    'NIPLU': ['NIPEL'],
-    'REDUCTIE': ['REDUS', 'REDUCER', 'REDUCERE'],
+    # Fitinguri - CORECTATE
+    'COT': ['GAT', 'UNGHI', 'COLT'],
+    'TEU': ['T', 'RAMIFICATIE', 'TRU', 'TEI'],
+    'TRU': ['TEU', 'T'],
+    'TEI': ['TEU', 'T'],
+    'NIPLU': ['NIPEL'],  # NU include MUFA!
+    'DOP': ['CAP', 'CAPAC'],
+    'REDUCTIE': ['REDUS', 'REDUCER'],
     'REDUS': ['REDUCTIE', 'REDUCER'],
-    'ADAPTOR': ['ADAPTO', 'RACORD', 'CONECTOR'],
-    'RACORD': ['NACORD', 'RACOR'],
-    'NACORD': ['RACORD'],
-    'OLANDEZ': ['OLAND', 'HOLENDER'],
-    'PRELUNGITOR': ['PRELUNGITO', 'EXTENSIE'],
-    'BRATARA': ['BRATARI', 'COLIER', 'CLEMA'],
-    'BRATARI': ['BRATARA', 'COLIER', 'CLEMA'],
-    'CLEMA': ['BRATARA', 'BRATARI', 'COLIER'],
-    'DOP': ['CAPAC', 'DOPI'],
-    'SUPAPA': ['SUPAA', 'VALVA', 'CLAPETA'],
-    'CLAPETA': ['SUPAPA', 'VALVA'],
-    'AERISITOR': ['AERISTO', 'DEZAERISITOR'],
-    'FILTRU': ['FILRU', 'FILTER'],
-    
-    # Altele
-    'SERPENTINA': ['SERPENTIN', 'SCHIMBATOR'],
-    'DUBLU': ['DUBLA', 'DOUBLE'],
-    'TERMOSTATIC': ['TERMOSTAT', 'TERMO'],
-    'TERMOSTAT': ['TERMOSTATIC', 'TERMO'],
-    'GOLIRE': ['GOLIR', 'EVACUARE', 'VIDANJARE'],
-    'SENS': ['DIRECTIE'],
-    'VAS': ['RECIPIENT', 'EXPANSIUNE'],
-    'POMPA': ['CIRCULATIE', 'RECIRCULARE'],
-    'SCAUN': ['SCAUNEL', 'SUPORT', 'SCARITA', 'RADIATOR BAIE'],
-    'XILO': ['WILO', 'HILO', 'CIRCULATIE'],
-    'WILO': ['XILO', 'HILO', 'CIRCULATIE'],
-    'HILO': ['WILO', 'XILO', 'CIRCULATIE'],
-    
-    # Erori OCR comune
-    'DUSAR': ['DUSER', 'DUS'],
-    'BLUZT': ['BULZI', 'BULZ'],
-    'DFIER': ['FIER', 'OTEL'],
-    
-    # Abrevieri comune (adaugat din v8)
-    'AUTOCUR': ['AUTOCURATIRE', 'AUTOCURATARE'],
-    'AUTOCURATIRE': ['AUTOCUR'],
-    'IGENIC': ['IGIENIC'],
-    'IGIENIC': ['IGENIC'],
-    'TERMOVENTIL': ['VTC', 'VENTIL TERMIC'],
-    'VASE': ['VAS'],
-    'EXP': ['EXPANSIUNE'],
-    'EXPANSIUNE': ['EXP'],
-    'CONECTOR': ['RACORD', 'ADAPTOR', 'CONECTORI'],
-    'CONECTORI': ['RACORD', 'RACORDURI', 'CONECTOR'],
-    'PARDOSEALA': ['PARDOSEA', 'INCALZIRE PODEA'],
-    'PARDOSEA': ['PARDOSEALA'],
-    
-    # Vase expansiune
-    'ALBASTRU': ['HIDROFOR', 'APA RECE', 'APA'],
+    'OLANDEZ': ['RACORD', 'PIULITA'],
+    'SUPAPA': ['VALVA', 'VENTIL'],
+    'VANA': ['ROBINET', 'VENTIL'],
+    'FILTRU': ['FILTER'],
 }
 
-# Construim reverse lookup pentru sinonime
-ALL_SYNONYMS = {}
-for key, values in SYNONYMS.items():
-    ALL_SYNONYMS[key] = set(values + [key])
-    for v in values:
-        if v not in ALL_SYNONYMS:
-            ALL_SYNONYMS[v] = set()
-        ALL_SYNONYMS[v].add(key)
-        ALL_SYNONYMS[v].update(values)
-
-def normalize_text(text):
-    """Normalizeaza textul pentru cautare"""
-    text = text.upper()
-    # Inlocuieste caractere speciale cu spatiu
-    text = re.sub(r'[X/\-\"\'\.\,\(\)\°]', ' ', text)
-    # Normalizeaza dimensiuni comune
-    text = re.sub(r'1\s*1\s*/\s*2', '1 1/2', text)
-    text = re.sub(r'1\s*/\s*2', '1/2', text)
-    text = re.sub(r'3\s*/\s*4', '3/4', text)
-    text = re.sub(r'1\s*/\s*4', '1/4', text)
-    # Elimina spatii multiple
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-def get_search_words(text):
-    """Obtine cuvintele din text inclusiv sinonimele"""
-    norm = normalize_text(text)
-    words = set()
-    for w in norm.split():
-        if len(w) >= 1:
-            words.add(w)
-            # Adauga si sinonime
-            if w in ALL_SYNONYMS:
-                words.update(ALL_SYNONYMS[w])
-    return words
-
-def load_database():
-    """
-    Incarca baza de date la pornirea serverului.
-    Cauta automat fisiere .csv sau .xlsx in folderul curent.
-    """
-    global PRODUCTS_DB, WORD_FREQ
-    print("🔄 Initializez incarcarea bazei de date...")
+def normalize_query(query):
+    """Normalizare avansată query (din v31)"""
+    q = query.upper().strip()
     
-    # Cautam fisiere posibile
-    files = [f for f in os.listdir('.') if f.endswith(('.csv', '.xlsx'))]
-    file_path = files[0] if files else 'produse_nexus.csv'
+    # Normalizări diacritice
+    q = unidecode(q)
     
-    if not os.path.exists(file_path):
-        print(f"⚠️ ATENTIE: Nu am gasit fisierul '{file_path}'. Urca-l pe server!")
+    # Normalizări dimensiuni PPR
+    q = q.replace('3EX', '32X')
+    q = q.replace('2EX', '25X')
+    q = q.replace('1EX', '20X')
+    
+    # Normalizări inch/fracții
+    q = q.replace('TOL', '"')
+    q = q.replace('INCH', '"')
+    q = q.replace('½', '1/2')
+    q = q.replace('¾', '3/4')
+    q = q.replace('¼', '1/4')
+    q = q.replace('1½', '1.1/2')
+    q = q.replace('2½', '2.1/2')
+    
+    # Normalizări sinonime directe
+    q = q.replace(' TRU ', ' TEU ')
+    q = q.replace(' TEI ', ' TEU ')
+    q = q.replace(' TIAN ', ' TEAVA ')
+    q = q.replace(' TIGAN ', ' TEAVA ')
+    
+    # Spații multiple
+    q = ' '.join(q.split())
+    
+    return q
+
+def load_sales_history():
+    """Încarcă rulaj (identic cu v2.0)"""
+    global RULAJ_DB
+    print("🔄 Caut fișiere de rulaj...")
+    
+    files = [f for f in os.listdir('.') if f.endswith(('.csv', '.xlsx', '.xls')) and ('vandute' in f.lower() or 'rulaj' in f.lower())]
+    
+    if not files:
+        print("⚠️ Nu am găsit fișier de vânzări.")
         return
 
     try:
-        # Citire inteligenta (Excel sau CSV)
+        file_path = files[0]
+        print(f"📂 Încarc rulaj din: {file_path}")
+        
+        if file_path.endswith('.xlsx') or file_path.endswith('.xls'):
+            df = pd.read_excel(file_path, dtype=str)
+        else:
+            df = pd.read_csv(file_path, dtype=str, on_bad_lines='skip')
+
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        
+        col_qty = next((c for c in df.columns if 'cantitate' in c or 'stoc' in c), None)
+        col_cod = next((c for c in df.columns if 'cod' in c), None)
+
+        if col_qty and col_cod:
+            df[col_qty] = pd.to_numeric(df[col_qty], errors='coerce').fillna(0).abs()
+            rulaj_group = df.groupby(col_cod)[col_qty].sum()
+            RULAJ_DB = rulaj_group.to_dict()
+            print(f"✅ Rulaj încărcat: {len(RULAJ_DB)} produse.")
+        else:
+            print(f"❌ Coloane lipsă în rulaj.")
+
+    except Exception as e:
+        print(f"❌ Eroare rulaj: {e}")
+
+def load_products_database():
+    """Încarcă produse (îmbunătățit cu normalizare)"""
+    global PRODUCTS_DB, WORD_FREQ
+    print("🔄 Caut baza de date produse...")
+    
+    files = [f for f in os.listdir('.') if f.endswith(('.csv', '.xlsx')) and 'nexus' in f.lower() and 'vandute' not in f.lower()]
+    
+    if not files:
+        print("❌ Nu am găsit fișierul de produse.")
+        return
+
+    try:
+        file_path = files[0]
+        print(f"📂 Încarc produse din: {file_path}")
+        
         if file_path.endswith('.xlsx'):
             df = pd.read_excel(file_path, dtype=str)
         else:
-            try:
-                df = pd.read_csv(file_path, dtype=str, on_bad_lines='skip', engine='python')
-            except:
-                df = pd.read_csv(file_path, sep=';', dtype=str, on_bad_lines='skip', engine='python')
+            df = pd.read_csv(file_path, dtype=str, on_bad_lines='skip')
 
-        df.columns = [c.strip().lower() for c in df.columns]
+        df.columns = [str(c).strip().lower() for c in df.columns]
         
         col_den = next((c for c in df.columns if 'denumire' in c), None)
-        col_cod = next((c for c in df.columns if c == 'cod'), None)
-        col_sel = next((c for c in df.columns if 'selectie' in c), None)
+        col_cod_lung = next((c for c in df.columns if c == 'cod'), None)
+        col_cod_scurt = next((c for c in df.columns if 'selectie' in c), None)
         
-        if not col_den:
-            df = df.iloc[:, [0, 3, 12]]
-            df.columns = ['cod_lung', 'denumire', 'cod_scurt']
-        else:
-            rename_map = {col_den: 'denumire'}
-            if col_cod: rename_map[col_cod] = 'cod_lung'
-            if col_sel: rename_map[col_sel] = 'cod_scurt'
-            df = df.rename(columns=rename_map)
+        if not col_den and len(df.columns) > 3:
+            df = df.iloc[:, [0, 3, 12] if len(df.columns) > 12 else [0, 1]]
+            col_cod_lung = df.columns[0]
+            col_den = df.columns[1]
+            col_cod_scurt = df.columns[2] if len(df.columns) > 2 else None
 
-        df = df.fillna('')
-        
-        # Procesare cu indexare pentru cautare smart
         clean_data = []
-        WORD_FREQ.clear()
-        
+        word_list = []
+
         for _, row in df.iterrows():
-            den = str(row.get('denumire', '')).strip()
-            if len(den) < 2 or den.lower() == 'denumire': continue
+            den = str(row.get(col_den, '')).strip()
+            if len(den) < 2 or den.lower() == 'denumire': 
+                continue
             
-            c_lung = str(row.get('cod_lung', '')).strip()
-            c_scurt = str(row.get('cod_scurt', '')).strip()
-            final_code = c_scurt if c_scurt else c_lung
+            c_lung = str(row.get(col_cod_lung, '')).strip()
+            c_scurt = str(row.get(col_cod_scurt, '')).strip()
             
-            # Normalizare pentru cautare (cu sinonime)
-            words = get_search_words(den)
-            den_norm = normalize_text(den)
+            final_code = c_scurt if c_scurt and c_scurt.lower() != 'nan' else c_lung
             
-            # Adaugam si codul in cuvintele de cautare
-            if final_code:
-                code_words = get_search_words(final_code)
-                words.update(code_words)
-            
-            # Actualizam frecventa cuvintelor
-            for w in words:
-                WORD_FREQ[w] += 1
-            
-            clean_data.append({
-                'd': den,
-                'c': final_code,
-                'words': words,
-                'norm': den_norm
-            })
-            
+            if final_code and final_code.lower() != 'nan':
+                sales_score = RULAJ_DB.get(final_code, 0)
+                if sales_score == 0 and c_lung:
+                    sales_score = RULAJ_DB.get(c_lung, 0)
+
+                # Normalizare denumire pentru căutare
+                den_norm = normalize_query(den)
+                
+                prod_obj = {
+                    'd': den,
+                    'c': final_code,
+                    'norm': den_norm,  # Pentru căutare
+                    'score': float(sales_score)
+                }
+                clean_data.append(prod_obj)
+                word_list.extend(den_norm.split())
+
+        clean_data.sort(key=lambda x: x['score'], reverse=True)
+        
         PRODUCTS_DB = clean_data
-        print(f"✅ SUCCES: {len(PRODUCTS_DB)} produse incarcate in memorie.")
-        print(f"📊 Index: {len(WORD_FREQ)} cuvinte unice indexate.")
+        WORD_FREQ = Counter(word_list)
+        
+        print(f"✅ Baza de date: {len(PRODUCTS_DB)} produse.")
         
     except Exception as e:
-        print(f"❌ EROARE CRITICA la citirea bazei de date: {e}")
+        print(f"❌ Eroare produse: {e}")
 
-# Încărcăm baza la start
-load_database()
+def filter_by_dimensions(query_normalized, results):
+    """
+    FIX v31: FILTRARE STRICTĂ dimensiuni SIMPLE vs COMPUSE
+    """
+    import re
+    
+    # Detectare dimensiuni SIMPLE
+    has_1_inch = bool(re.search(r'\b1["\']', query_normalized))
+    has_2_inch = bool(re.search(r'\b2["\']', query_normalized))
+    has_1_half = bool(re.search(r'1\.1/2|1 1/2|1½', query_normalized))
+    has_half = bool(re.search(r'\b1/2\b|½', query_normalized))
+    has_three_quarters = bool(re.search(r'\b3/4\b|¾', query_normalized))
+    
+    if not any([has_1_inch, has_2_inch, has_1_half, has_half, has_three_quarters]):
+        return results
+    
+    filtered = []
+    
+    for r in results:
+        prod_text = (r['c'] + ' ' + r['d']).upper()
+        exclude = False
+        
+        # Când query are 1" SIMPLU
+        if has_1_inch and not has_half and not has_1_half:
+            # Regex COMPLET (v31): exclude 1.1/4, 1 1/4, 1'1/4, 1''1/4, 1"1/4
+            if re.search(r'1\.1/[24]|1 1/[24]|1["\']+ ?1/[24]|1½|1¼', prod_text):
+                exclude = True
+            elif re.search(r'\b1/[24]\b', prod_text) and not re.search(r'\b1["\']', prod_text):
+                exclude = True
+        
+        # Când query are 1½ EXPLICIT
+        if has_1_half:
+            if not re.search(r'1\.1/2|1 1/2|1½', prod_text):
+                exclude = True
+        
+        # Când query are ½ SIMPLU (fără 1)
+        if has_half and not has_1_inch and not has_1_half:
+            if not re.search(r'1/2|½', prod_text):
+                exclude = True
+        
+        if not exclude:
+            filtered.append(r)
+    
+    return filtered if filtered else results
 
-# --- INCARCARE RULAJ PRODUSE ---
-def load_rulaj():
-    """Incarca rulajul produselor din fisierul Excel"""
-    global RULAJ_DB
-    import os
+def filter_by_product_type(query_normalized, results):
+    """
+    FIX v31: PRE-FILTRARE pe TIP produs
+    """
+    product_types = {
+        'NIPLU': 'NIPLU',
+        'DOP': 'DOP',
+        'REDUCTIE': 'REDUCT',
+        'REDUS': 'REDUCT',
+        'MUFA': 'MUFA',
+        'COT': 'COT',
+        'TEU': 'TEU',
+        'FILTRU': 'FILTRU',
+        'SUPAPA': 'SUPAPA',
+        'ROBINET': 'ROBINET',
+        'VANA': 'VANA',
+    }
     
-    # Cauta fisierul cu rulaj
-    rulaj_paths = [
-        'produse_vandute_2025.xls',
-        'produse_vandute_2025_xlsx.xls',
-        '/root/nexus-pro/produse_vandute_2025.xls',
-        '/root/nexus-pro/produse_vandute_2025_xlsx.xls',
-    ]
-    
-    rulaj_file = None
-    for path in rulaj_paths:
-        if os.path.exists(path):
-            rulaj_file = path
+    detected_type = None
+    for query_word, search_pattern in product_types.items():
+        if query_word in query_normalized:
+            detected_type = search_pattern
             break
     
-    if not rulaj_file:
-        print("⚠️ Fisierul cu rulaj nu a fost gasit. Rulaj dezactivat.")
-        return
+    if detected_type:
+        results_with_type = [r for r in results if detected_type in r['d'].upper()]
+        if results_with_type:
+            print(f"🔍 PRE-FILTRARE: '{detected_type}' → {len(results_with_type)} produse")
+            return results_with_type
     
-    try:
-        import pandas as pd
-        df = pd.read_excel(rulaj_file)
-        df['cantitate_abs'] = df['cantitate'].abs()
-        
-        # Grupam pe cod si sumam cantitatile
-        df_grouped = df.groupby('cod_ext')['cantitate_abs'].sum().reset_index()
-        
-        for _, row in df_grouped.iterrows():
-            cod = str(row['cod_ext']).strip()
-            if cod:
-                RULAJ_DB[cod] = row['cantitate_abs']
-        
-        print(f"📊 RULAJ: {len(RULAJ_DB)} produse cu rulaj incarcat.")
-        
-        # Top 5 pentru verificare
-        top5 = sorted(RULAJ_DB.items(), key=lambda x: -x[1])[:5]
-        for cod, cant in top5:
-            print(f"   🔥 {cod}: {cant:.0f} buc")
-            
-    except Exception as e:
-        print(f"⚠️ Eroare la incarcarea rulajului: {e}")
+    return results
 
-# Incarcam rulajul
-load_rulaj()
-
-# --- REGULA SPECIALA 18: ECHIPAMENTE PRINCIPALE - CANTITATE DEFAULT 1 ---
-MAIN_EQUIPMENT_KEYWORDS = [
-    'CENTRALA', 'CENTRALE', 'PUFFER', 'VAS EXPANSIUNE', 'VAS EXPAN',
-    'BOILER', 'POMPA DE CALDURA', 'POMPA CALDURA', 'ACUMULATOR',
-    'REZERVOR', 'SCHIMBATOR', 'BATERIE TERMICA'
-]
-
-def is_main_equipment(line_text):
-    """
-    Verifică dacă linia conține un echipament principal.
-    Echipamentele principale sunt categorii mari (centrale, puffere, vase)
-    nu accesorii (racorduri, robinete, etc).
-    """
-    line_upper = line_text.upper()
-    return any(keyword in line_upper for keyword in MAIN_EQUIPMENT_KEYWORDS)
-
-def extract_quantity_smart(line_text):
-    """
-    Extrage cantitate cu logică specială pentru echipamente principale.
-    
-    REGULA:
-    - Pentru echipamente principale (CENTRALA, PUFFER, VAS EXPANSIUNE):
-      Caută DOAR cantitate la final cu 'buc/bucati/bucăți'
-      Dacă nu găsește → DEFAULT = 1
-    
-    - Pentru accesorii normale:
-      Logica clasică - extrage ultimul număr sau primul număr rezonabil
-    
-    Exemple problematice FIXATE:
-    - "Puffer 500l 2 serpentine" → 1 (nu 500!)
-    - "Vas expansiune 50 albastru" → 1 (nu 50!)
-    - "Centrala 28-30kw" → 1 (nu 28!)
-    - "Puffer 500l 2 serpentine 3 buc" → 3 (corect!)
-    """
-    line_text = line_text.strip()
-    
-    # === FIX v20: Elimină dimensiuni cu litri (50L, 100L) înainte de procesare ===
-    # Pentru a evita confuzia între "Vas 50L" (dimensiune) și "50 buc" (cantitate)
-    line_text_clean = re.sub(r'\d+\s*[Ll]\b', '', line_text)
-    
-    # ECHIPAMENTE PRINCIPALE - cantitate doar cu "buc" explicit
-    if is_main_equipment(line_text_clean):
-        # Caută pattern "X buc" la final
-        match_buc = re.search(r'(\d+)\s*(buc|bucati|bucăți|bucată)\s*$', 
-                             line_text_clean, re.IGNORECASE)
-        if match_buc:
-            return int(match_buc.group(1))
-        else:
-            # DEFAULT pentru echipamente principale
-            return 1
-    
-    # ACCESORII - logica normală
-    else:
-        # Caută pattern "X buc" oriunde
-        match_buc = re.search(r'(\d+)\s*(buc|bucati|bucăți|bucată)', 
-                             line_text_clean, re.IGNORECASE)
-        if match_buc:
-            return int(match_buc.group(1))
-        
-        # Caută ultimul număr din linie (probabil cantitatea)
-        all_numbers = re.findall(r'\d+', line_text_clean)
-        if all_numbers:
-            # Returnează ultimul număr găsit
-            return int(all_numbers[-1])
-        
-        # Default general
-        return 1
+# --- INIȚIALIZARE ---
+print("=" * 80)
+print("🔄 Initializez incarcarea bazei de date...")
+load_sales_history()
+load_products_database()
+print(f"✅ SUCCES: {len(PRODUCTS_DB)} produse incarcate in memorie.")
+print(f"📊 RULAJ: {len(RULAJ_DB)} produse cu rulaj incarcat.")
+if RULAJ_DB:
+    top_3 = sorted(RULAJ_DB.items(), key=lambda x: x[1], reverse=True)[:3]
+    for cod, qty in top_3:
+        print(f"   🔥 {cod}: {int(qty)} buc")
+print("=" * 80)
 
 # --- RUTE WEB ---
 
@@ -357,954 +302,103 @@ def extract_quantity_smart(line_text):
 def index():
     return render_template('index.html')
 
-@app.route('/api/parse-text', methods=['POST'])
-def parse_text():
-    """
-    API endpoint nou pentru parsarea SAFE a textului paste-uit.
-    Folosește REGULA SPECIALA 18 pentru cantități.
-    
-    Primește JSON: { "text": "1) Centrala...\n2) Puffer..." }
-    Returnează JSON: { "items": [{ "text": "Centrala...", "qty": 1 }, ...] }
-    """
-    try:
-        data = request.json
-        raw_text = data.get('text', '').strip()
-        
-        if not raw_text:
-            return jsonify({"items": []})
-        
-        # Parsare linii
-        lines = raw_text.split('\n')
-        items = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line or len(line) < 3:
-                continue
-            
-            # Elimină numerotarea de la început (1), 2., etc.)
-            line_clean = re.sub(r'^\d+[\)\.]\s*', '', line)
-            
-            if not line_clean:
-                continue
-            
-            # Extrage cantitate cu logica SMART (REGULA 18)
-            qty = extract_quantity_smart(line_clean)
-            
-            # Elimină cantitatea din text pentru afișare
-            text_without_qty = re.sub(r'\s*\d+\s*(buc|bucati|bucăți|bucată)\s*$', '', 
-                                     line_clean, flags=re.IGNORECASE)
-            
-            items.append({
-                "text": text_without_qty.strip(),
-                "qty": qty
-            })
-        
-        return jsonify({"items": items})
-        
-    except Exception as e:
-        print(f"Eroare parse-text: {e}")
-        return jsonify({"error": str(e)})
-
-def filter_strict_dimensions(query_normalized, results):
-    """
-    FIX v30: FILTRARE STRICTĂ pe dimensiuni SIMPLE vs COMPUSE
-    
-    Problema: "Niplu 1"" găsește "NIPLU 1.1/4"-1" pentru că "1" match-uiește ca substring
-    Soluție: Când query are dimensiune SIMPLĂ (1", ½", ¾") → EXCLUDE dimensiuni COMPUSE
-    
-    Parametri:
-    - query_normalized: Query normalizat (uppercase, fără diacritice)
-    - results: Lista de rezultate după scoring
-    
-    Return:
-    - Lista filtrată de rezultate
-    """
-    import re
-    
-    # Detectează dimensiuni SIMPLE în query
-    has_1_inch = bool(re.search(r'\b1["\']', query_normalized))
-    has_2_inch = bool(re.search(r'\b2["\']', query_normalized))
-    has_3_inch = bool(re.search(r'\b3["\']', query_normalized))
-    has_4_inch = bool(re.search(r'\b4["\']', query_normalized))
-    has_half = bool(re.search(r'\b1/2\b|½', query_normalized))
-    has_three_quarters = bool(re.search(r'\b3/4\b|¾', query_normalized))
-    has_one_quarter = bool(re.search(r'\b1/4\b|¼', query_normalized))
-    
-    # Dacă NU are dimensiuni simple, return nemodificat
-    if not any([has_1_inch, has_2_inch, has_3_inch, has_4_inch, has_half, has_three_quarters, has_one_quarter]):
-        return results
-    
-    # Aplică filtrare bazată pe dimensiunea detectată
-    filtered_results = []
-    
-    for r in results:
-        prod_text = (r['c'] + ' ' + r['d']).upper()
-        exclude = False
-        
-        # Când query are 1" EXACT → exclude produse cu dimensiuni compuse sau fracțiuni
-        if has_1_inch and not has_half and not has_three_quarters and not has_one_quarter:
-            # === FIX v31: Regex COMPLET pentru TOATE variațiile de scriere ===
-            # Exclude: 1.1/2, 1 1/2, 1'1/2, 1''1/2, 1"1/2, 1½
-            # Exclude: 1.1/4, 1 1/4, 1'1/4, 1''1/4, 1"1/4, 1¼
-            # Pattern: 1['\"]+ ?1/[24] match-uiește 1 sau mai multe apostrofuri/ghilimele + spațiu opțional
-            if re.search(r'1\.1/[24]|1 1/[24]|1["\']+ ?1/[24]|1½|1¼', prod_text):
-                exclude = True
-            # Exclude și produse care au DOAR fracțiuni fără 1 întreg
-            elif re.search(r'\b1/[24]\b', prod_text) and not re.search(r'\b1["\']', prod_text):
-                exclude = True
-            # Exclude produse REDUSE (1"-1/2", 1"-3/4") DOAR dacă query NU conține "REDUS" sau "LA"
-            elif 'REDUS' not in query_normalized and 'LA' not in query_normalized:
-                if re.search(r'1["\'][- ]*1/[24]|1["\'][- ]*3/4', prod_text):
-                    exclude = True
-        
-        # Când query are 2" EXACT → exclude dimensiuni compuse
-        if has_2_inch and not has_half:
-            if re.search(r'2\.1/2|2 1/2|2½', prod_text):
-                exclude = True
-        
-        # Când query are ½ sau 1/2 EXPLICIT → păstrează DOAR produse cu 1/2 sau ½
-        if has_half and not has_1_inch:
-            # Trebuie să aibă explicit 1/2 sau ½
-            if not re.search(r'1/2|½', prod_text):
-                exclude = True
-        
-        # Când query are ¾ sau 3/4 EXPLICIT → păstrează DOAR produse cu 3/4 sau ¾
-        if has_three_quarters and not has_1_inch:
-            if not re.search(r'3/4|¾', prod_text):
-                exclude = True
-        
-        # Când query are ¼ sau 1/4 EXPLICIT → păstrează DOAR produse cu 1/4 sau ¼
-        if has_one_quarter and not has_1_inch:
-            if not re.search(r'1/4|¼', prod_text):
-                exclude = True
-        
-        if not exclude:
-            filtered_results.append(r)
-    
-    # Dacă filtrarea a eliminat TOATE produsele → returnează originalul
-    # (evită cazul când nu găsește nimic)
-    if not filtered_results:
-        return results
-    
-    return filtered_results
-
 @app.route('/api/search', methods=['POST'])
 def search():
     """
-    API endpoint pentru cautarea SMART cu sinonime.
-    Primeste JSON: { "query": "robinet 1/2" }
-    Returneaza JSON: [ { "d": "Robinet...", "c": "123" }, ... ]
+    API Search cu fix-uri v31
     """
     try:
-        # === FIX v27: Import re pentru regex în reguli ===
-        import re
-        
         data = request.json
         query = data.get('query', '').strip()
         
-        # === FIX v25: NORMALIZARE DIACRITICE ROMÂNEȘTI ===
-        # Problema: query-urile vin cu "peleți", "expansiunea", "espansiune"
-        # Soluție: Normalizăm toate diacriticele la caractere simple
-        query_normalized = query.upper()
-        query_normalized = query_normalized.replace('Ț', 'T').replace('Ţ', 'T')
-        query_normalized = query_normalized.replace('Ș', 'S').replace('Ş', 'S')
-        query_normalized = query_normalized.replace('Ă', 'A').replace('Â', 'A').replace('Î', 'I')
-        # Fix greșeli de scriere comune: "espansiune" → "expansiune"
-        query_normalized = query_normalized.replace('ESPANSIUNE', 'EXPANSIUNE')
-        query_normalized = query_normalized.replace('ESPANS', 'EXPANS')
-        
-        # === FIX v26: NORMALIZARE DIMENSIUNI PPR ===
-        # PPR folosește dimensiuni standard: 20, 25, 32, 40, 50
-        # "3ex1" trebuie interpretat ca "32x1", "2ex" ca "25", etc
-        query_normalized = query_normalized.replace('5EX', '50X')
-        query_normalized = query_normalized.replace('4EX', '40X')
-        query_normalized = query_normalized.replace('3EX', '32X')
-        query_normalized = query_normalized.replace('2EX', '25X')
-        # Fix și pentru 1½ (1.5 inch)
-        query_normalized = query_normalized.replace('1½', '1.5')
-        query_normalized = query_normalized.replace('1 1/2', '1.5')
-        
-        # === FIX v29: NORMALIZARE GREȘELI DE SCRIERE TEI/TRU → TEU ===
-        # "TEI PPR" și "TRU ZN" sunt greșeli comune pentru "TEU"
-        query_normalized = query_normalized.replace(' TEI ', ' TEU ')
-        query_normalized = query_normalized.replace(' TRU ', ' TEU ')
-        # La început de string
-        if query_normalized.startswith('TEI '):
-            query_normalized = 'TEU ' + query_normalized[4:]
-        if query_normalized.startswith('TRU '):
-            query_normalized = 'TEU ' + query_normalized[4:]
-        
-        # === LOG v24: Afișează TOATE query-urile relevante pentru debugging ===
-        # Afișăm doar query-uri lungi (>15 caractere) care conțin cuvinte cheie
-        if len(query) > 15:
-            query_check = query_normalized  # Folosim query normalizat
-            if 'CENTRAL' in query_check or 'PELETI' in query_check or 'VAS' in query_check or 'EXPAN' in query_check:
-                print(f"📥 QUERY LUNG PRIMIT: '{query}' → NORMALIZAT: '{query_normalized}'")
-                print(f"   Lungime: {len(query)} caractere")
-        
-        if not query or len(query) < 2:
+        if len(query) < 2:
             return jsonify([])
         
-        # Obtine cuvintele din query (cu sinonime)
-        query_words = get_search_words(query)
-        if not query_words:
-            return jsonify([])
+        # Normalizare query
+        query_normalized = normalize_query(query)
         
+        # Expandare cu sinonime
+        query_words = query_normalized.split()
+        expanded_terms = set(query_words)
+        for word in query_words:
+            if word in SYNONYMS:
+                expanded_terms.update(SYNONYMS[word])
+        
+        # Căutare
         results = []
-        total = len(PRODUCTS_DB)
+        search_terms = [t.lower() for t in expanded_terms]
         
         for prod in PRODUCTS_DB:
-            matched_words = query_words & prod['words']
-            
-            # Cautare substring in cod si denumire (pentru coduri ca R470AX003)
-            # FIX v25: Folosim query_normalized în loc de query_normalized
-            substring_match = False
-            if len(query_normalized) >= 3:
-                if query_normalized in prod['c'].upper() or query_normalized in prod['d'].upper():
-                    substring_match = True
-            
-            if not matched_words and not substring_match:
-                continue
-            
-            # Calcul scor
-            score = 0
-            for w in matched_words:
-                # IDF: cuvinte rare = scor mare
-                freq = WORD_FREQ.get(w, 1)
-                idf = total / freq
-                score += idf
-            
-            # Bonus pentru substring match in cod
-            if substring_match:
-                score += 100  # Prioritate mare pentru match exact in cod
-            
-            # Bonus pentru mai multe potriviri
-            match_ratio = len(matched_words) / len(query_words) if matched_words else (0.5 if substring_match else 0)
-            score *= (1 + match_ratio)
-            
-            # Bonus daca potriveste numere exacte
-            query_nums = set(re.findall(r'\d+', query.upper()))
-            prod_nums = set(re.findall(r'\d+', prod.get('norm', '')))
-            num_matches = len(query_nums & prod_nums)
-            if num_matches > 0:
-                score *= (1 + num_matches * 0.3)
-            
-            # Bonus pentru produse cu rulaj mare (cele mai vandute)
-            cod_produs = prod['c']
-            rulaj = RULAJ_DB.get(cod_produs, 0)
-            if rulaj > 10000:
-                score *= 1.5  # Bonus 50% pentru produse foarte vandute
-            elif rulaj > 1000:
-                score *= 1.3  # Bonus 30% pentru produse vandute
-            elif rulaj > 100:
-                score *= 1.1  # Bonus 10% pentru produse cu rulaj
-            
-            # Bonus pentru dimensiuni EXACTE (ex: 600x600 gaseste 600X600 primul)
-            # Fix: elimina punctele din numere (1.000 -> 1000)
-            query_for_dims = re.sub(r'(\d)\.(\d)', r'\1\2', query.upper())
-            query_nums_list = re.findall(r'\d+', query_for_dims)
-            if len(query_nums_list) >= 2:
-                query_dims = ''.join(query_nums_list)  # "600600"
-                prod_dims = re.sub(r'[^0-9]', '', prod['d'].upper())  # extrage toate numerele
-                if query_dims in prod_dims:
-                    score *= 3  # Bonus mare pentru match exact dimensiuni
-            
-            # === FIX v29: BONUS MASIV pentru match EXACT pe dimensiuni individuale ===
-            # Problema: "Dop ½ zn" găsește "DOP 1" în loc de "DOP 1/2"
-            # Când query conține dimensiuni exacte (½, 1", 32mm) → BONUS dacă produsul le conține
-            query_dimensions = set()
-            # Extrage dimensiuni comune: 1/2, 3/4, 1", 1.5", 32, etc
-            query_dimensions.update(re.findall(r'\d+/\d+', query_normalized))  # 1/2, 3/4
-            query_dimensions.update(re.findall(r'\d+\.\d+"?', query_normalized))  # 1.5, 1.5"
-            query_dimensions.update(re.findall(r'\d+"', query_normalized))  # 1", 2"
-            
-            if query_dimensions:
-                prod_text = (prod['c'] + ' ' + prod['d']).upper()
-                exact_dim_matches = sum(1 for dim in query_dimensions if dim in prod_text)
-                if exact_dim_matches == len(query_dimensions):
-                    # TOATE dimensiunile din query apar în produs
-                    score *= 5  # BOOST x5 pentru match perfect dimensiuni
-                elif exact_dim_matches > 0:
-                    # Doar UNELE dimensiuni match
-                    score *= 1.5
-                elif exact_dim_matches == 0 and len(query_dimensions) > 0:
-                    # NICIO dimensiune nu match → penalizare
-                    score *= 0.3
-            
-            # === FIX v29: BOOST MASIV pentru coduri RAD* când caută RACORD PPR ===
-            # Problema: "Racord ppr 32x1" găsește CLEMA în loc de RAD3210FI
-            if 'RACORD' in query_normalized and 'PPR' in query_normalized:
-                if prod['c'].upper().startswith('RAD'):
-                    score *= 10  # BOOST x10 pentru coduri RAD*
-            
-            # === FIX v20: BOOST MASIV pentru centrale peleți ===
-            # === FIX v21: Cresc BOOST de la x20 la x100 ===
-            # Când utilizatorul caută "centrala peleti", sistemul trebuie să prioritizeze
-            # centrale pe peleți față de alte produse (ex: kit-uri GPL) chiar dacă acestea
-            # au match mai bun pe dimensiuni
-            if 'CENTRALA' in query_normalized and 'PELETI' in query_normalized:
-                prod_upper = prod['d'].upper()
-                if 'CENTRALA' in prod_upper and 'PELETI' in prod_upper:
-                    score *= 100  # x100 pentru a GARANTA că depășește orice alt match
-            
-            results.append({
-                'd': prod['d'],
-                'c': prod['c'],
-                'score': score,
-                'ratio': match_ratio
-            })
+            # Match toate cuvintele
+            if all(term in prod['norm'].lower() for term in query_words):
+                results.append(prod)
+                if len(results) >= 100:  # Limită inițială
+                    break
         
-        # Sorteaza dupa ratio apoi scor
-        results.sort(key=lambda x: (-x['ratio'], -x['score']))
+        # FIX v31: PRE-FILTRARE pe TIP
+        results = filter_by_product_type(query_normalized, results)
         
-        # REGULA SPECIALA 1: Radiatoare OTEL - prioritate TERMO+ si 22K
-        # FIX v25: query_normalized e deja definit la început cu normalizare diacritice
-        is_radiator_query = ('RADIATOR' in query_normalized or 'CALORIFER' in query_normalized) and 'OTEL' in query_normalized
-        is_scarita_query = 'SCARIT' in query_normalized or 'SCARA' in query_normalized or ('BAIE' in query_normalized and ('RADIATOR' in query_normalized or '600' in query_normalized))
+        # FIX v31: FILTRARE dimensiuni
+        results = filter_by_dimensions(query_normalized, results)
         
-        if is_radiator_query or is_scarita_query:
-            # Verifica daca NU e specificat 11 sau 33
-            has_11 = '11K' in query_normalized or ' 11 ' in query_normalized or query_normalized.endswith(' 11')
-            has_33 = '33K' in query_normalized or ' 33 ' in query_normalized or query_normalized.endswith(' 33')
-            
-            def is_termo_plus(denumire):
-                return 'TERMO+' in denumire.upper() or 'TERMO +' in denumire.upper()
-            
-            def is_22k(denumire):
-                d = denumire.upper()
-                return '22K' in d or ' 22/' in d or '/22/' in d or 'TIP 22' in d or ' 22 ' in d
-            
-            # Prioritate: 1. TERMO+ cu 22K, 2. TERMO+, 3. 22K, 4. restul
-            results_termo_22k = [r for r in results if is_termo_plus(r['d']) and (is_22k(r['d']) or not has_11 and not has_33)]
-            results_termo = [r for r in results if is_termo_plus(r['d']) and r not in results_termo_22k]
-            results_22k = [r for r in results if is_22k(r['d']) and not is_termo_plus(r['d']) and not has_11 and not has_33]
-            results_other = [r for r in results if r not in results_termo_22k and r not in results_termo and r not in results_22k]
-            
-            results = results_termo_22k + results_termo + results_22k + results_other
-        
-        # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
-        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
-            has_boiler = 'BOILER' in query_normalized or 'CENTRALA' in query_normalized or 'TERMIC' in query_normalized
-            has_hidrofor = 'HIDROFOR' in query_normalized or 'POMPARE' in query_normalized or 'APA' in query_normalized
-            
-            def get_vas_priority(cod, denumire):
-                c = cod.upper()
-                d = denumire.upper()
-                
-                if has_boiler:
-                    # Pentru boiler/centrala: VR prioritar
-                    if c.startswith('VR') and not c.startswith('VRV'):
-                        return 1
-                    if c.startswith('VRV'):
-                        return 2
-                    return 10
-                elif has_hidrofor:
-                    # Pentru hidrofor: VAV prioritar
-                    if c.startswith('VAV'):
-                        return 1
-                    if c.startswith('VAO'):
-                        return 2
-                    return 10
-                else:
-                    # Fara specificatie: general VR > VRV > VAV > VAO
-                    if c.startswith('VR') and not c.startswith('VRV'):
-                        return 1
-                    if c.startswith('VRV'):
-                        return 2
-                    if c.startswith('VAV'):
-                        return 3
-                    if c.startswith('VAO'):
-                        return 4
-                    return 10
-            
-            results.sort(key=lambda r: (get_vas_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 3: Pompe WILO/HILO/XILO - YONOS PICO 1.0 prioritar
-        if any(x in query_normalized for x in ['WILO', 'HILO', 'XILO', 'POMPA', 'CIRCULATIE']):
-            def get_pompa_priority(cod, denumire):
-                d = denumire.upper()
-                # YONOS PICO 1.0 prioritar
-                if 'YONOS PICO 1.0' in d or 'YONOS PICO 10' in d:
-                    return 1
-                if 'YONOS PICO' in d:
-                    return 2
-                if 'YONOS' in d:
-                    return 3
-                if any(x in d for x in ['WILO', 'HILO', 'XILO']):
-                    return 4
-                return 10
-            results.sort(key=lambda r: (get_pompa_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 4: Cand cauta explicit "TERMO+" -> prioritar TERMO+
-        if 'TERMO+' in query_normalized or 'TERMO +' in query_normalized:
-            def has_termo_plus(denumire):
-                d = denumire.upper()
-                return 'TERMO+' in d or 'TERMO +' in d
-            results.sort(key=lambda r: (0 if has_termo_plus(r['d']) else 1, -r.get('score', 0)))
-        
-        # REGULA SPECIALA 5: PUFFER - TERMO+ cu METAL+INOX prioritar
-        if 'PUFFER' in query_normalized:
-            def get_puffer_priority(cod, denumire):
-                d = denumire.upper()
-                c = cod.upper()
-                # HPh* = PUFFER TERMO+ cu METAL+INOX
-                if 'TERMO+' in d and 'METAL' in d and 'INOX' in d:
-                    return 1
-                if c.startswith('HPh'):
-                    return 2
-                if 'TERMO+' in d:
-                    return 3
-                if 'METAL' in d and 'INOX' in d:
-                    return 4
-                return 10
-            results.sort(key=lambda r: (get_puffer_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 6: KIT TUR-RETUR - R470X001 prioritar
-        if ('KIT' in query_normalized or 'SET' in query_normalized) and 'TUR' in query_normalized and 'RETUR' in query_normalized:
-            def get_kit_tur_retur_priority(cod, denumire):
-                c = cod.upper()
-                if 'R470X001' in c or 'R470AX001' in c:
-                    return 1
-                if c.startswith('R470'):
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_kit_tur_retur_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 7: GRUP SOLAR/POMPARE SOLAR - GPD212 GRUNDFOS prioritar
-        if 'GRUP' in query_normalized and ('SOLAR' in query_normalized or 'POMPARE' in query_normalized):
-            def get_grup_solar_priority(cod, denumire):
-                c = cod.upper()
-                d = denumire.upper()
-                # GPD212 = Grup pompare solar Grundfos prioritar
-                if 'GPD212' in c:
-                    return 1
-                if 'GRUNDFOS' in d and 'SOLAR' in d:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_grup_solar_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 8: KIT AERISITOR SOLAR - 63280648 cu pipa prioritar
-        if ('KIT' in query_normalized or 'SET' in query_normalized) and 'AERISITOR' in query_normalized and 'SOLAR' in query_normalized:
-            def get_kit_aerisitor_priority(cod, denumire):
-                c = cod.upper()
-                d = denumire.upper()
-                # 63280648 = Kit aerisitor solar cu pipa prioritar
-                if '63280648' in c:
-                    return 1
-                if 'PIPA' in d or 'TIJA' in d:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_kit_aerisitor_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 9: VAS SOLAR - VS* prioritar
-        if 'VAS' in query_normalized and 'SOLAR' in query_normalized:
-            def get_vas_solar_priority(cod, denumire):
-                c = cod.upper()
-                # VS12, VS18, VS24 = Vase solare prioritare
-                if c.startswith('VS') and any(x in c for x in ['12', '18', '24', '35', '50']):
-                    return 1
-                if c.startswith('VS'):
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_vas_solar_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 10: SET CONECTORI INOX 16 - 63281189 prioritar
-        if ('SET' in query_normalized or 'KIT' in query_normalized) and 'CONECTOR' in query_normalized and ('16' in query or 'INOX' in query_normalized):
-            def get_set_conectori_priority(cod, denumire):
-                c = cod.upper()
-                # 63281189 = Set conectori inox 16 prioritar
-                if '63281189' in c:
-                    return 1
-                if 'INOX' in denumire.upper() and '16' in cod:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_set_conectori_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 11: GRUP PARDOSEALA - OTR-WP/OTF-WP/OZR-WP TERMO+ prioritar
-        if 'GRUP' in query_normalized and ('PARDOSEALA' in query_normalized or 'PARDOSEA' in query_normalized):
-            def get_grup_pardoseala_priority(cod, denumire):
-                c = cod.upper()
-                d = denumire.upper()
-                # OTR-WP, OTF-WP, OZR-WP = Grupuri pardoseala Termo+ prioritare
-                if any(x in c for x in ['OTR-WP', 'OTF-WP', 'OZR-WP']):
-                    return 1
-                if c.startswith('OT') or c.startswith('OZ'):
-                    return 2
-                if 'TERMO+' in d:
-                    return 4
-                return 10
-            results.sort(key=lambda r: (get_grup_pardoseala_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 12: TERMOMANOMETRU - THMTAA prioritar
-        if 'TERMOMANOMETRU' in query_normalized or 'TERMO MANOMETRU' in query_normalized:
-            def get_termomanometru_priority(cod, denumire):
-                c = cod.upper()
-                # THMTAA = Termomanometru axial prioritar
-                if c.startswith('THMTAA'):
-                    return 1
-                if c.startswith('THMTA'):
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_termomanometru_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 13: ROBINET CU CANEA/MANETA - ASTER prioritar
-        if 'ROBINET' in query_normalized and ('CANEA' in query_normalized or 'MANETA' in query_normalized):
-            def get_robinet_canea_priority(cod, denumire):
-                d = denumire.upper()
-                # ASTER prioritar daca nu specifica FF sau MF
-                if 'ASTER' in d:
-                    return 1
-                if 'FF' in d or 'MF' in d:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_robinet_canea_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 14: OLANDEZ BRONZ/ALAMA - OLDR* prioritar
-        if 'OLANDEZ' in query_normalized and ('BRONZ' in query_normalized or 'ALAMA' in query_normalized):
-            def get_olandez_priority(cod, denumire):
-                c = cod.upper()
-                # OLDR = Olandez drept prioritar
-                if c.startswith('OLDR'):
-                    return 1
-                return 10
-            results.sort(key=lambda r: (get_olandez_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 15: FILTRU Y - Y* ECO prioritar
-        if 'FILTRU' in query_normalized and 'Y' in query_normalized:
-            def get_filtru_y_priority(cod, denumire):
-                c = cod.upper()
-                d = denumire.upper()
-                # Y114 etc = Filtru Y ECO prioritar
-                if c.startswith('Y') and 'FILTRU' in d and 'Y' in d:
-                    return 1
-                if 'ECO' in d:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_filtru_y_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 16: AERISITOR AUTOMAT GIACOMINI - R88IY003 prioritar
-        if 'AERISITOR' in query_normalized and 'GIACOMINI' in query_normalized:
-            def get_aerisitor_giacomini_priority(cod, denumire):
-                c = cod.upper()
-                # R88IY003 = Aerisitor automat de coloana Giacomini prioritar
-                if 'R88IY' in c:
-                    return 1
-                if 'GIACOMINI' in denumire.upper():
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_aerisitor_giacomini_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 17: SUPORT VAS - SUPORT PERETE VASE EXP prioritar
-        if 'SUPORT' in query_normalized and 'VAS' in query_normalized:
-            def get_suport_vas_priority(cod, denumire):
-                d = denumire.upper()
-                c = cod.upper()
-                # SUPORT PERETE VASE EXP prioritar
-                if 'PERETE' in d and 'VAS' in d:
-                    return 1
-                if c.startswith('2068') or c.startswith('2069'):
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_suport_vas_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 18: CENTRALA PELETI - autocuratire prioritar
-        if 'CENTRALA' in query_normalized and 'PELETI' in query_normalized:
-            def get_centrala_peleti_priority(cod, denumire):
-                d = denumire.upper()
-                # AUTOCURATIRE prioritar
-                if 'AUTOCURATIRE' in d or 'AUTOCUR' in d:
-                    return 1
-                if 'PELETI' in d and 'CENTRALA' in d:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_centrala_peleti_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 19: NIPLU/REDUCTIE mari (>=1½") - ZN (zincate) prioritar
-        if ('NIPLU' in query_normalized or 'REDUCTIE' in query_normalized or 'REDUS' in query_normalized):
-            # Verifică dacă sunt dimensiuni mari (1½" sau 2")
-            has_large_dim = any(x in query_normalized for x in ['1 1/2', '1½', '1 1 2', '2"', '2 ', ' 2'])
-            # Verifică dacă NU specifică alama/eco
-            has_alama = 'ALAMA' in query_normalized or 'BRONZ' in query_normalized
-            has_eco = 'ECO' in query_normalized
-            
-            if has_large_dim and not has_alama and not has_eco:
-                def get_niplu_zn_priority(cod, denumire):
-                    d = denumire.upper()
-                    c = cod.upper()
-                    # ZN = zinc/zincate prioritar pentru dimensiuni mari
-                    if 'ZN' in c or 'ZINC' in d or 'ZINCAT' in d:
-                        return 1
-                    if 'ALAMA' in d or 'BRONZ' in d:
-                        return 3
-                    return 2
-                results.sort(key=lambda r: (get_niplu_zn_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 20: VAS EXPANSIUNE - VRV > VR > VRW (rafinare pentru vase roșii)
-        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
-            has_hidrofor = 'HIDROFOR' in query_normalized or 'APA' in query_normalized
-            
-            if not has_hidrofor:
-                # Pentru încălzire/generale: VRV > VR > VRW
-                def get_vas_rosu_priority(cod):
-                    c = cod.upper()
-                    if c.startswith('VRV'):
-                        return 1  # Vertical cu suport - CEL MAI FOLOSIT
-                    if c.startswith('VR') and not c.startswith('VRV') and not c.startswith('VRW'):
-                        return 2  # Normal
-                    if c.startswith('VRW'):
-                        return 3  # Orizontal
-                    return 10
-                
-                results.sort(key=lambda r: (get_vas_rosu_priority(r['c']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 21: GRUP SIGURANTA - HERZ prioritar
-        if 'GRUP' in query_normalized and ('SIGURANTA' in query_normalized or 'SIG' in query_normalized):
-            def get_grup_siguranta_priority(cod, denumire):
-                d = denumire.upper()
-                c = cod.upper()
-                # HERZ prioritar
-                if 'HERZ' in d or 'HERZ' in c:
-                    return 1
-                if 'GRSIGHERZ' in c:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_grup_siguranta_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 22: VAS ALBASTRU/HIDROFOR - VAO/VAV prioritar peste INOX
-        # FIX v21: Când caută "vas albastru" sau "vas hidrofor" → prioritate vase albastre (VAO/VAV)
-        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
-            has_albastru = 'ALBASTRU' in query_normalized or 'HIDROFOR' in query_normalized or 'APA' in query_normalized
-            
-            if has_albastru:
-                def get_vas_albastru_priority(cod, denumire):
-                    c = cod.upper()
-                    d = denumire.upper()
-                    # VAO/VAV = vase albastre (hidrofor) prioritare
-                    if c.startswith('VAO') or c.startswith('VAV'):
-                        return 1
-                    # Excludem INOX (care nu sunt vase expansiune)
-                    if c.startswith('INOX') or 'INOX' in c[:10]:
-                        return 10
-                    return 5
-                
-                results.sort(key=lambda r: (get_vas_albastru_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 23: ROBINET CU OLANDEZ - EFCO/COLLETTORE prioritar
-        # FIX v26: Pentru robinete cu olandez → prioritate EFCO și COLLETTORE
-        if 'ROBINET' in query_normalized and 'OLANDEZ' in query_normalized:
-            def get_robinet_olandez_priority(cod, denumire):
-                c = cod.upper()
-                d = denumire.upper()
-                # EFCO prioritar
-                if 'EFCO' in c or 'EFCO' in d:
-                    return 1
-                # COLLETTORE prioritar
-                if 'COLLETTORE' in d:
-                    return 2
-                return 10
-            results.sort(key=lambda r: (get_robinet_olandez_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 24: PPR FARA CULOARE - ALB prioritar
-        # FIX v26: Când caută PPR fără să specifice culoare → prioritate ALB (exclude gri/verde)
-        if 'PPR' in query_normalized:
-            has_verde = 'VERDE' in query_normalized
-            has_gri = 'GRI' in query_normalized
-            has_alb = 'ALB' in query_normalized
-            
-            # Dacă NU specifică culoare → prioritate ALB
-            if not has_verde and not has_gri and not has_alb:
-                def get_ppr_alb_priority(cod, denumire):
-                    d = denumire.upper()
-                    # ALB prioritar
-                    if 'ALB' in d:
-                        return 1
-                    # Exclude VERDE și GRI
-                    if 'VERDE' in d or 'GRI' in d:
-                        return 10
-                    # Neutru (fără culoare specificată în denumire)
-                    return 5
-                results.sort(key=lambda r: (get_ppr_alb_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 25: OLANDEZ PPR - când e singură dimensiune → caută XXxXX
-        # FIX v26: "Olandez PPR 32" → caută 32x32, nu 32x1
-        if 'OLANDEZ' in query_normalized and 'PPR' in query_normalized:
-            # Extrage dimensiunea (20, 25, 32, 40, 50)
-            ppr_dims = re.findall(r'\b(20|25|32|40|50)\b', query_normalized)
-            if len(ppr_dims) == 1:
-                dim = ppr_dims[0]
-                # Caută produse cu XXxXX (ex: 32x32)
-                def get_olandez_ppr_priority(cod, denumire):
-                    c = cod.upper()
-                    d = denumire.upper()
-                    pattern = f'{dim}X{dim}'
-                    if pattern in c or pattern in d or f'{dim}X{dim}' in d:
-                        return 1
-                    # Exclude dimensiuni diferite (ex: 32x1)
-                    if f'{dim}X' in c or f'{dim}X' in d:
-                        other_dim = re.search(f'{dim}X(\\d+)', c + d)
-                        if other_dim and other_dim.group(1) != dim:
-                            return 10
-                    return 5
-                results.sort(key=lambda r: (get_olandez_ppr_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 26: REDUCTIE/NIPLU REDUS - match precis dimensiuni
-        # FIX v26: "Reducție 1½la 1" → 1.5"x1", nu 1.25"x1"
-        if ('REDUCTIE' in query_normalized or 'REDUS' in query_normalized or 'NIPLU' in query_normalized):
-            # Extrage toate dimensiunile din query
-            # Caută pattern-uri precum 1.5, 1/2, 3/4, etc
-            dims_in_query = set()
-            # Dimensiuni cu punct (1.5)
-            dims_in_query.update(re.findall(r'\d+\.\d+', query_normalized))
-            # Dimensiuni întregi
-            dims_in_query.update(re.findall(r'\b[1-4]\b', query_normalized))
-            
-            if len(dims_in_query) >= 2:
-                # Are cel puțin 2 dimensiuni → match exact
-                def get_reductie_priority(cod, denumire):
-                    text = (cod + ' ' + denumire).upper()
-                    # Verifică dacă TOATE dimensiunile din query apar în produs
-                    matches = sum(1 for dim in dims_in_query if dim in text)
-                    if matches == len(dims_in_query):
-                        return 1
-                    elif matches > 0:
-                        return 5
-                    return 10
-                results.sort(key=lambda r: (get_reductie_priority(r['c'], r['d']), -r.get('score', 0)))
-        
-        # === FIX v22: FILTRĂRI FINALE pentru cazuri problemă ===
-        
-        # FILTRARE 1: CENTRALA PELETI - Exclude tot ce NU conține "peleti"
-        if 'CENTRALA' in query_normalized and 'PELETI' in query_normalized:
-            # === DEBUG v23: Afișează ce se întâmplă la filtrare ===
-            print(f"🔍 DEBUG FILTRARE CENTRALA: Query='{query}'")
-            print(f"   Înainte filtrare: {len(results)} produse")
-            print(f"   Top 3 înainte:")
-            for i, r in enumerate(results[:3], 1):
-                print(f"      {i}. {r['c']}: {r['d'][:60]}")
-            
-            # Păstrează DOAR produse care au "PELETI" sau "PELET" în denumire
-            results = [r for r in results if 'PELETI' in r['d'].upper() or 'PELET' in r['d'].upper()]
-            
-            # === DEBUG v23: Afișează rezultatul filtrării ===
-            print(f"   După filtrare: {len(results)} produse")
-            print(f"   Top 3 după:")
-            for i, r in enumerate(results[:3], 1):
-                print(f"      {i}. {r['c']}: {r['d'][:60]}")
-        
-        # FILTRARE 2: VAS ALBASTRU/HIDROFOR - Prioritizează VAO/VAV, exclude INOX
-        if 'VAS' in query_normalized and ('EXPANSIUNE' in query_normalized or 'EXPAN' in query_normalized):
-            has_albastru = 'ALBASTRU' in query_normalized or 'HIDROFOR' in query_normalized or 'APA' in query_normalized
-            
-            if has_albastru:
-                # === DEBUG v23: Afișează ce se întâmplă la filtrare vase ===
-                print(f"🔍 DEBUG FILTRARE VAS ALBASTRU: Query='{query}'")
-                print(f"   Înainte filtrare: {len(results)} produse")
-                print(f"   Top 3 înainte:")
-                for i, r in enumerate(results[:3], 1):
-                    print(f"      {i}. {r['c']}: {r['d'][:60]}")
-                
-                # Caută explicit vase albastre (VAO/VAV)
-                vas_albastru = [r for r in results if r['c'].upper().startswith('VAO') or r['c'].upper().startswith('VAV')]
-                
-                if vas_albastru:
-                    # Găsit vase albastre → folosește doar pe acestea
-                    results = vas_albastru
-                    print(f"   ✓ Găsit {len(vas_albastru)} vase albastre (VAO/VAV)")
-                else:
-                    # Fallback: exclude INOX (nu sunt vase expansiune)
-                    results = [r for r in results if not r['c'].upper().startswith('INOX')]
-                    print(f"   ✓ Nu găsit VAO/VAV, exclus INOX, rămas {len(results)} produse")
-                
-                # === DEBUG v23: Afișează rezultatul ===
-                print(f"   După filtrare: {len(results)} produse")
-                print(f"   Top 3 după:")
-                for i, r in enumerate(results[:3], 1):
-                    print(f"      {i}. {r['c']}: {r['d'][:60]}")
-        
-        # FILTRARE 3: RACORD PPR - Exclude produse cu ROBINET și CLEMA
-        # FIX v28: Când caută "RACORD PPR" → exclude produse cu "ROBINET" în denumire
-        # FIX v29: Exclude și "CLEMA" care conține cuvântul RACORD dar nu e racord PPR
-        # Problema: "ROBINET CU TERMOMETRU SI RACORD PENTRU POMPA" și "CLEMA DE RACORD"
-        # conțin cuvântul RACORD și au scor mare, dar nu sunt RACORDURI PPR
-        if 'RACORD' in query_normalized and 'PPR' in query_normalized:
-            # Exclude produse care au "ROBINET" sau "CLEMA" în denumire
-            results_filtered = [r for r in results 
-                              if 'ROBINET' not in r['d'].upper() 
-                              and 'CLEMA' not in r['d'].upper()]
-            
-            # Doar dacă găsim produse fără ROBINET/CLEMA (ar trebui să existe)
-            if results_filtered:
-                results = results_filtered
-        
-        # === FIX v31: PRE-FILTRARE STRICTĂ pe TIP PRODUS ===
-        # Problema: "Niplu 1\" ZN" găsește "MUFA ZN" pentru că ambele conțin "ZN"
-        # Soluție: Când query conține TIP specific (NIPLU, DOP, etc) → păstrează DOAR acel tip
-        
-        # Lista de tipuri specifice care necesită pre-filtrare
-        product_types = {
-            'NIPLU': 'NIPLU',
-            'DOP': 'DOP',
-            'REDUCTIE': 'REDUCT',  # Match și REDUCTIE, REDUCER, etc
-            'REDUS': 'REDUCT',
-            'MUFA': 'MUFA',
-            'COT': 'COT',
-            'TEU': 'TEU',
-            'FILTRU': 'FILTRU',
-            'SUPAPA': 'SUPAPA',
-            'ROBINET': 'ROBINET',
-            'VANA': 'VANA',
-        }
-        
-        # Detectează tipul de produs în query
-        detected_type = None
-        for query_word, search_pattern in product_types.items():
-            if query_word in query_normalized:
-                detected_type = search_pattern
-                break
-        
-        # Dacă detectat tip specific → filtrare STRICTĂ
-        if detected_type:
-            results_with_type = [r for r in results if detected_type in r['d'].upper()]
-            # Doar dacă găsește produse de tipul corect
-            if results_with_type:
-                results = results_with_type
-                print(f"🔍 PRE-FILTRARE v31: Query conține '{detected_type}' → păstrate {len(results)} produse")
-        
-        # === FIX v30: FILTRARE FINALĂ STRICTĂ pe dimensiuni SIMPLE vs COMPUSE ===
-        # Aplică-se LA SFÂRȘIT, după toate regulile și sortările
-        # Exclude dimensiuni compuse când query are dimensiuni simple (1", ½", etc)
-        results = filter_strict_dimensions(query_normalized, results)
-        
-        # Returneaza doar d si c (fara scor)
+        # Returnează top 30
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
         
     except Exception as e:
         print(f"Eroare search: {e}")
         return jsonify([])
 
-# --- CHEIA OPENAI (stocata pe server) ---
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
-
-# Daca nu e in environment, citeste din fisier
-if not OPENAI_API_KEY:
-    try:
-        with open('/root/nexus-pro/.openai_key', 'r') as f:
-            OPENAI_API_KEY = f.read().strip()
-    except:
-        pass
-
-@app.route('/api/ocr-openai', methods=['POST'])
-def ocr_openai():
-    """
-    API endpoint pentru OCR cu OpenAI GPT-4o.
-    Cheia API e stocata pe server - nu mai trebuie introdusa in browser.
-    """
-    try:
-        if not OPENAI_API_KEY:
-            return jsonify({"error": "OpenAI API key not configured on server"})
-        
-        data = request.json
-        image_base64 = data.get('image', '')
-        
-        if not image_base64:
-            return jsonify({"error": "No image provided"})
-        
-        # Call OpenAI API
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": "gpt-4o",
-            "temperature": 0,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Extrage TOATE produsele din aceasta imagine. REGULI: 1) Extrage FIECARE linie care contine un produs, NU sari peste nicio linie. 2) Daca e o lista scrisa de mana sau tiparita, extrage TOATE elementele de la PRIMA pana la ULTIMA linie. 3) Daca vezi un titlu/categorie urmat de dimensiuni, combina-le. 4) Cantitatea poate fi 'buc', 'bucati', un numar, sau la sfarsitul liniei. 5) Daca nu vezi cantitate explicita, pune qty: 1. 6) Include CENTRALE, PUFFER, BOILER, POMPE - sunt produse importante! 7) ATENTIE LA CIFRE SCRISE DE MANA: 0 nu e 6, 8 nu e 9, 1 nu e 7, 00 nu e 06. Verifica de doua ori numerele! Raspunde DOAR cu JSON valid. Format: { \"items\": [{ \"text\": \"nume produs complet\", \"qty\": cantitate_numar }] }"
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
-                    }
-                ]
-            }],
-            "response_format": {"type": "json_object"}
-        }
-        
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=120
-        )
-        
-        result = response.json()
-        
-        if 'error' in result:
-            return jsonify({"error": result['error'].get('message', 'OpenAI error')})
-        
-        content = result['choices'][0]['message']['content']
-        content = content.replace('```json', '').replace('```', '').strip()
-        parsed = json.loads(content)
-        
-        return jsonify(parsed)
-        
-    except requests.exceptions.Timeout:
-        return jsonify({"error": "Timeout - procesarea durează prea mult"})
-    except Exception as e:
-        print(f"Eroare OCR OpenAI: {e}")
-        return jsonify({"error": str(e)})
-
 @app.route('/api/ocr', methods=['POST'])
-def ocr():
-    """
-    API endpoint pentru OCR cu Ollama LLaVA local.
-    Primește JSON: { "image": "base64_string" }
-    Returnează JSON: { "items": [{ "text": "...", "qty": 1 }] }
-    """
+def process_ocr():
+    """OCR processing (identic cu v2.0)"""
     try:
         data = request.json
         image_base64 = data.get('image', '')
         
         if not image_base64:
-            return jsonify({"error": "No image provided"})
+            return jsonify({"error": "Lipseste imaginea"})
+
+        print(f"🤖 Trimit cerere către {OLLAMA_MODEL}...")
         
-        # Call Ollama API
-        ollama_response = requests.post(
-            'http://127.0.0.1:11434/api/generate',
-            json={
-                "model": "llava:7b",
-                "prompt": "Extrage produsele din această imagine. Răspunde DOAR cu JSON valid, fără alte explicații. Format exact: { \"items\": [{ \"text\": \"nume produs\", \"qty\": 1 }] }. Dacă vezi cantități, include-le. Dacă nu vezi cantitate, pune qty: 1.",
-                "images": [image_base64],
-                "stream": False
-            },
-            timeout=120
-        )
+        ollama_payload = {
+            "model": OLLAMA_MODEL,
+            "prompt": (
+                "Esti un expert in instalatii. Analizeaza lista scrisa de mana din imagine. "
+                "Extrage produsele si cantitatile. "
+                "Returneaza DOAR un JSON valid, fara markdown, cu acest format strict: "
+                "{ \"items\": [{ \"text\": \"nume produs detectat\", \"qty\": 1 }] }. "
+                "Daca nu vezi cantitate, pune 1. Nu adauga text extra."
+            ),
+            "images": [image_base64],
+            "stream": False,
+            "options": {"temperature": 0.1}
+        }
         
-        result = ollama_response.json()
-        response_text = result.get('response', '')
+        response = requests.post(OLLAMA_API_URL, json=ollama_payload, timeout=120)
         
-        # Clean and parse JSON
-        response_text = response_text.replace('```json', '').replace('```', '').strip()
-        
-        # Try to find JSON in response
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group())
-            return jsonify(parsed)
-        else:
-            return jsonify({"error": "Nu am putut extrage produse din imagine", "raw": response_text})
+        if response.status_code != 200:
+            return jsonify({"error": f"Ollama Error: {response.text}"})
             
-    except requests.exceptions.Timeout:
-        return jsonify({"error": "Timeout - imaginea durează prea mult"})
+        result = response.json()
+        raw_text = result.get('response', '')
+        
+        clean_text = raw_text.replace('```json', '').replace('```', '').strip()
+        
+        try:
+            json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+            if json_match:
+                parsed_data = json.loads(json_match.group())
+                return jsonify(parsed_data)
+            else:
+                return jsonify({"error": "Nu am găsit JSON valid", "raw": raw_text})
+        except json.JSONDecodeError:
+            return jsonify({"error": "Eroare decodare JSON", "raw": clean_text})
+
+    except requests.exceptions.ConnectionError:
+        return jsonify({"error": "Nu mă pot conecta la Ollama."})
     except Exception as e:
-        print(f"Eroare OCR: {e}")
+        print(f"❌ Eroare OCR: {e}")
         return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
-    # Configurare pentru rulare locală sau server
     app.run(host='0.0.0.0', port=8082, debug=True)
