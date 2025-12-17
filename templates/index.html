@@ -411,6 +411,32 @@
                     raw = raw.replace(/```json/g, '').replace(/```/g, '').trim();
                     
                     const items = JSON.parse(raw).items;
+                    
+                    // VALIDARE POST-OCR: Daca o linie e doar dimensiuni, ia categoria de la linia anterioara
+                    let lastCategory = '';
+                    for (let j = 0; j < items.length; j++) {
+                        const text = items[j].text.trim();
+                        const textUpper = text.toUpperCase();
+                        
+                        // Detectam categoria din linia curenta
+                        if (textUpper.includes('CALORIFER') && textUpper.includes('OTEL')) {
+                            lastCategory = 'CALORIFER OTEL';
+                        } else if (textUpper.includes('SCARIT') || textUpper.includes('SCARA') || 
+                                   (textUpper.includes('BAIE') && !textUpper.includes('ROBINET'))) {
+                            lastCategory = 'SCARITA BAIE';
+                        } else if (textUpper.includes('RADIATOR') && textUpper.includes('OTEL')) {
+                            lastCategory = 'RADIATOR OTEL';
+                        }
+                        
+                        // Daca linia e DOAR dimensiuni (ex: "600 x 1200", "600 X 600")
+                        const isDimensionsOnly = /^\d+\s*[Xx×]\s*[\d\.]+\s*$/.test(text) || 
+                                                  /^\d+\s*[Xx×]\s*[\d\.]+\s*-/.test(text);
+                        
+                        if (isDimensionsOnly && lastCategory) {
+                            items[j].text = lastCategory + ' ' + text;
+                        }
+                    }
+                    
                     await addRows(items, i + 1);
                     IMAGES[i].processed = true;
 
