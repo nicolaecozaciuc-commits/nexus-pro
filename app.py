@@ -278,11 +278,124 @@ def load_rulaj():
 # Incarcam rulajul
 load_rulaj()
 
+# --- REGULA SPECIALA 18: ECHIPAMENTE PRINCIPALE - CANTITATE DEFAULT 1 ---
+MAIN_EQUIPMENT_KEYWORDS = [
+    'CENTRALA', 'CENTRALE', 'PUFFER', 'VAS EXPANSIUNE', 'VAS EXPAN',
+    'BOILER', 'POMPA DE CALDURA', 'POMPA CALDURA', 'ACUMULATOR',
+    'REZERVOR', 'SCHIMBATOR', 'BATERIE TERMICA'
+]
+
+def is_main_equipment(line_text):
+    """
+    Verifică dacă linia conține un echipament principal.
+    Echipamentele principale sunt categorii mari (centrale, puffere, vase)
+    nu accesorii (racorduri, robinete, etc).
+    """
+    line_upper = line_text.upper()
+    return any(keyword in line_upper for keyword in MAIN_EQUIPMENT_KEYWORDS)
+
+def extract_quantity_smart(line_text):
+    """
+    Extrage cantitate cu logică specială pentru echipamente principale.
+    
+    REGULA:
+    - Pentru echipamente principale (CENTRALA, PUFFER, VAS EXPANSIUNE):
+      Caută DOAR cantitate la final cu 'buc/bucati/bucăți'
+      Dacă nu găsește → DEFAULT = 1
+    
+    - Pentru accesorii normale:
+      Logica clasică - extrage ultimul număr sau primul număr rezonabil
+    
+    Exemple problematice FIXATE:
+    - "Puffer 500l 2 serpentine" → 1 (nu 500!)
+    - "Vas expansiune 50 albastru" → 1 (nu 50!)
+    - "Centrala 28-30kw" → 1 (nu 28!)
+    - "Puffer 500l 2 serpentine 3 buc" → 3 (corect!)
+    """
+    line_text = line_text.strip()
+    
+    # ECHIPAMENTE PRINCIPALE - cantitate doar cu "buc" explicit
+    if is_main_equipment(line_text):
+        # Caută pattern "X buc" la final
+        match_buc = re.search(r'(\d+)\s*(buc|bucati|bucăți|bucată)\s*$', 
+                             line_text, re.IGNORECASE)
+        if match_buc:
+            return int(match_buc.group(1))
+        else:
+            # DEFAULT pentru echipamente principale
+            return 1
+    
+    # ACCESORII - logica normală
+    else:
+        # Caută pattern "X buc" oriunde
+        match_buc = re.search(r'(\d+)\s*(buc|bucati|bucăți|bucată)', 
+                             line_text, re.IGNORECASE)
+        if match_buc:
+            return int(match_buc.group(1))
+        
+        # Caută ultimul număr din linie (probabil cantitatea)
+        all_numbers = re.findall(r'\d+', line_text)
+        if all_numbers:
+            # Returnează ultimul număr găsit
+            return int(all_numbers[-1])
+        
+        # Default general
+        return 1
+
 # --- RUTE WEB ---
 
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/api/parse-text', methods=['POST'])
+def parse_text():
+    """
+    API endpoint nou pentru parsarea SAFE a textului paste-uit.
+    Folosește REGULA SPECIALA 18 pentru cantități.
+    
+    Primește JSON: { "text": "1) Centrala...\n2) Puffer..." }
+    Returnează JSON: { "items": [{ "text": "Centrala...", "qty": 1 }, ...] }
+    """
+    try:
+        data = request.json
+        raw_text = data.get('text', '').strip()
+        
+        if not raw_text:
+            return jsonify({"items": []})
+        
+        # Parsare linii
+        lines = raw_text.split('\n')
+        items = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line or len(line) < 3:
+                continue
+            
+            # Elimină numerotarea de la început (1), 2., etc.)
+            line_clean = re.sub(r'^\d+[\)\.]\s*', '', line)
+            
+            if not line_clean:
+                continue
+            
+            # Extrage cantitate cu logica SMART (REGULA 18)
+            qty = extract_quantity_smart(line_clean)
+            
+            # Elimină cantitatea din text pentru afișare
+            text_without_qty = re.sub(r'\s*\d+\s*(buc|bucati|bucăți|bucată)\s*$', '', 
+                                     line_clean, flags=re.IGNORECASE)
+            
+            items.append({
+                "text": text_without_qty.strip(),
+                "qty": qty
+            })
+        
+        return jsonify({"items": items})
+        
+    except Exception as e:
+        print(f"Eroare parse-text: {e}")
+        return jsonify({"error": str(e)})
 
 @app.route('/api/search', methods=['POST'])
 def search():
@@ -398,230 +511,153 @@ def search():
             results = results_termo_22k + results_termo + results_22k + results_other
         
         # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
-        is_vas_query = 'VAS' in query_upper and ('LITRI' in query_upper or 'EXPAN' in query_upper or any(c.isdigit() for c in query_upper))
-        
-        if is_vas_query:
-            is_hidrofor = 'HIDROFOR' in query_upper or 'APA RECE' in query_upper or 'APA' in query_upper
-            is_incalzire = 'BOILER' in query_upper or 'CENTRALA' in query_upper or 'INCALZIRE' in query_upper or 'BOLER' in query_upper
+        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
+            has_boiler = 'BOILER' in query_upper or 'CENTRALA' in query_upper or 'TERMIC' in query_upper
+            has_hidrofor = 'HIDROFOR' in query_upper or 'POMPARE' in query_upper or 'APA' in query_upper
             
-            def get_vas_priority(denumire, cod):
-                d = denumire.upper()
+            def get_vas_priority(cod, denumire):
                 c = cod.upper()
-                # VR = vas rosu fara suport (prioritate maxima pentru incalzire)
-                if c.startswith('VR') and not c.startswith('VRV'):
-                    return 1
-                # VRV = vas rosu vertical cu suport
-                if c.startswith('VRV'):
-                    return 2
-                # VAV/VAO = vas albastru (pentru hidrofor)
-                if c.startswith('VAV') or c.startswith('VAO'):
-                    return 3 if is_hidrofor else 5
-                return 10
-            
-            if is_incalzire or (not is_hidrofor):
-                # Pentru boiler/centrala: VR > VRV > restul
-                results.sort(key=lambda r: (get_vas_priority(r['d'], r['c']), -r.get('score', 0)))
-            elif is_hidrofor:
-                # Pentru hidrofor: VAV > VAO > restul
-                def get_hidrofor_priority(denumire, cod):
-                    c = cod.upper()
+                d = denumire.upper()
+                
+                if has_boiler:
+                    # Pentru boiler/centrala: VR prioritar
+                    if c.startswith('VR') and not c.startswith('VRV'):
+                        return 1
+                    if c.startswith('VRV'):
+                        return 2
+                    return 10
+                elif has_hidrofor:
+                    # Pentru hidrofor: VAV prioritar
                     if c.startswith('VAV'):
                         return 1
                     if c.startswith('VAO'):
                         return 2
                     return 10
-                results.sort(key=lambda r: (get_hidrofor_priority(r['d'], r['c']), -r.get('score', 0)))
+                else:
+                    # Fara specificatie: general VR > VRV > VAV > VAO
+                    if c.startswith('VR') and not c.startswith('VRV'):
+                        return 1
+                    if c.startswith('VRV'):
+                        return 2
+                    if c.startswith('VAV'):
+                        return 3
+                    if c.startswith('VAO'):
+                        return 4
+                    return 10
+            
+            results.sort(key=lambda r: (get_vas_priority(r['c'], r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 3: Pompe WILO/HILO - prioritate YONOS PICO 1.0
-        is_pompa_query = ('POMPA' in query_upper or 'WILO' in query_upper or 'HILO' in query_upper or 'XILO' in query_upper)
-        
-        if is_pompa_query:
-            def get_pompa_priority(denumire):
+        # REGULA SPECIALA 3: Pompe WILO/HILO/XILO - YONOS PICO 1.0 prioritar
+        if any(x in query_upper for x in ['WILO', 'HILO', 'XILO', 'POMPA', 'CIRCULATIE']):
+            def get_pompa_priority(cod, denumire):
                 d = denumire.upper()
-                # YONOS PICO 1.0 = prioritate maxima
-                if 'YONOS PICO 1.0' in d or 'YONOS PICO1.0' in d:
+                # YONOS PICO 1.0 prioritar
+                if 'YONOS PICO 1.0' in d or 'YONOS PICO 10' in d:
                     return 1
-                # YONOS PICO = prioritate 2
                 if 'YONOS PICO' in d:
                     return 2
-                # YONOS = prioritate 3
                 if 'YONOS' in d:
                     return 3
-                # Alte WILO
-                if 'WILO' in d:
-                    return 5
-                return 10
-            
-            results.sort(key=lambda r: (get_pompa_priority(r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 4: TERMO+ prioritar cand se cauta explicit termo+ (adaugat din v8)
-        if 'TERMO+' in query_upper or 'TERMO +' in query_upper:
-            def get_termo_priority(denumire):
-                d = denumire.upper()
-                if 'TERMO+' in d or 'TERMO +' in d:
-                    return 1
-                return 10
-            results.sort(key=lambda r: (get_termo_priority(r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 5: PUFFER - prioritate TERMO+ cu METAL + INOX (adaugat din v8)
-        is_puffer_query = 'PUFFER' in query_upper
-        
-        if is_puffer_query:
-            def get_puffer_priority(denumire):
-                d = denumire.upper()
-                has_termo = 'TERMO+' in d or 'TERMO +' in d
-                has_metal_inox = 'METAL' in d and 'INOX' in d
-                
-                # TERMO+ cu METAL + INOX = prioritate maxima
-                if has_termo and has_metal_inox:
-                    return 1
-                # TERMO+ = prioritate 2
-                if has_termo:
-                    return 2
-                # METAL + INOX = prioritate 3
-                if has_metal_inox:
-                    return 3
-                return 10
-            
-            results.sort(key=lambda r: (get_puffer_priority(r['d']), -r.get('score', 0)))
-        
-        # REGULA SPECIALA 6: KIT TUR+RETUR+CAP TERMOSTATIC
-        # Daca query contine TUR + RETUR + CAP/TERMOSTATIC -> kit Giacomini
-        has_tur = 'TUR' in query_upper
-        has_retur = 'RETUR' in query_upper or 'NET' in query_upper
-        has_cap = 'CAP' in query_upper or 'TERMOSTA' in query_upper
-        
-        if has_tur and (has_retur or has_cap):
-            # Verifica tipul de racord
-            has_pex = 'PEX' in query_upper or 'PE-XA' in query_upper or 'PEXA' in query_upper or ' FE ' in query_upper or query_upper.endswith(' FE')
-            has_ppr = 'PPR' in query_upper or ' FI ' in query_upper or query_upper.endswith(' FI')
-            
-            # Cauta produsele R470 in baza
-            if has_pex and has_retur:
-                # R470AX003 KIT TERMOSTATAT TUR+RETUR+TERMOSTAT 1/2X15*16 GIACOMINI (pentru PEX)
-                for prod in PRODUCTS_DB:
-                    if 'R470AX003' in prod['c'] or 'R470AX003' in prod['d']:
-                        # Adauga la inceput daca nu e deja
-                        kit_result = {'d': prod['d'], 'c': prod['c'], 'score': 99999, 'ratio': 1.0}
-                        results = [kit_result] + [r for r in results if r['c'] != prod['c']]
-                        break
-            elif has_ppr and has_retur:
-                # R470FX003 KIT TERMOSTATAT TUR+RETUR+TERMOSTAT 1/2" FI GIACOMINI (pentru PPR)
-                for prod in PRODUCTS_DB:
-                    if 'R470FX003' in prod['c'] or 'R470FX003' in prod['d']:
-                        kit_result = {'d': prod['d'], 'c': prod['c'], 'score': 99999, 'ratio': 1.0}
-                        results = [kit_result] + [r for r in results if r['c'] != prod['c']]
-                        break
-            elif has_retur:
-                # Daca nu e specificat tipul, arata ambele kituri primele
-                kit_results = [r for r in results if 'R470' in r['c'].upper() or ('KIT' in r['d'].upper() and 'TUR' in r['d'].upper())]
-                other_results = [r for r in results if r not in kit_results]
-                results = kit_results + other_results
-        
-        # REGULA SPECIALA 2: Vase expansiune - prioritate VR/VRV pentru boiler/centrala, VAV/VAO pentru hidrofor
-        is_vas_query = 'VAS' in query_upper and ('LITRI' in query_upper or 'LIT' in query_upper or 'L ' in query_upper)
-        if is_vas_query:
-            is_boiler = 'BOILER' in query_upper or 'CENTRALA' in query_upper or 'INCALZIRE' in query_upper
-            is_hidrofor = 'HIDROFOR' in query_upper or 'APA' in query_upper or 'RECE' in query_upper
-            
-            def get_vas_priority(cod, denumire):
-                c = cod.upper()
-                # VR = vas rosu fara suport (prioritar pentru boiler/centrala)
-                if c.startswith('VR') and not c.startswith('VRV'):
-                    return 1
-                # VRV = vas rosu vertical cu suport
-                if c.startswith('VRV'):
-                    return 2
-                # VAV = vas albastru vertical (prioritar pentru hidrofor)
-                if c.startswith('VAV'):
-                    return 3
-                # VAO = vas albastru orizontal
-                if c.startswith('VAO'):
+                if any(x in d for x in ['WILO', 'HILO', 'XILO']):
                     return 4
                 return 10
-            
-            if is_boiler or (not is_hidrofor):
-                # Prioritate: VR > VRV > altele
-                results.sort(key=lambda r: (get_vas_priority(r['c'], r['d']), -r.get('score', 0)))
-            elif is_hidrofor:
-                # Prioritate: VAV > VAO > altele
-                def get_hidrofor_priority(cod):
-                    c = cod.upper()
-                    if c.startswith('VAV'): return 1
-                    if c.startswith('VAO'): return 2
-                    return 10
-                results.sort(key=lambda r: (get_hidrofor_priority(r['c']), -r.get('score', 0)))
+            results.sort(key=lambda r: (get_pompa_priority(r['c'], r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 7: GRUP POMPARE SOLAR DUBLU - GPD212 GRUNDFOS prioritar
-        if 'GRUP' in query_upper and 'SOLAR' in query_upper:
+        # REGULA SPECIALA 4: Cand cauta explicit "TERMO+" -> prioritar TERMO+
+        if 'TERMO+' in query_upper or 'TERMO +' in query_upper:
+            def has_termo_plus(denumire):
+                d = denumire.upper()
+                return 'TERMO+' in d or 'TERMO +' in d
+            results.sort(key=lambda r: (0 if has_termo_plus(r['d']) else 1, -r.get('score', 0)))
+        
+        # REGULA SPECIALA 5: PUFFER - TERMO+ cu METAL+INOX prioritar
+        if 'PUFFER' in query_upper:
+            def get_puffer_priority(cod, denumire):
+                d = denumire.upper()
+                c = cod.upper()
+                # HPh* = PUFFER TERMO+ cu METAL+INOX
+                if 'TERMO+' in d and 'METAL' in d and 'INOX' in d:
+                    return 1
+                if c.startswith('HPh'):
+                    return 2
+                if 'TERMO+' in d:
+                    return 3
+                if 'METAL' in d and 'INOX' in d:
+                    return 4
+                return 10
+            results.sort(key=lambda r: (get_puffer_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 6: KIT TUR-RETUR - R470X001 prioritar
+        if ('KIT' in query_upper or 'SET' in query_upper) and 'TUR' in query_upper and 'RETUR' in query_upper:
+            def get_kit_tur_retur_priority(cod, denumire):
+                c = cod.upper()
+                if 'R470X001' in c or 'R470AX001' in c:
+                    return 1
+                if c.startswith('R470'):
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_kit_tur_retur_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 7: GRUP SOLAR/POMPARE SOLAR - GPD212 GRUNDFOS prioritar
+        if 'GRUP' in query_upper and ('SOLAR' in query_upper or 'POMPARE' in query_upper):
             def get_grup_solar_priority(cod, denumire):
                 c = cod.upper()
                 d = denumire.upper()
-                # GPD212 = Grup pompare dublu Grundfos (prioritate maxima)
-                if c.startswith('GPD212') or 'GPD212' in d:
+                # GPD212 = Grup pompare solar Grundfos prioritar
+                if 'GPD212' in c:
                     return 1
-                # GPD = Alte grupuri pompare dublu Grundfos
-                if c.startswith('GPD'):
+                if 'GRUNDFOS' in d and 'SOLAR' in d:
                     return 2
-                # DUBLU + TERMO+
-                if 'DUBLU' in d and 'TERMO+' in d:
-                    return 3
-                # DUBLU fara TERMO+
-                if 'DUBLU' in d:
-                    return 4
-                if 'TERMO+' in d:
-                    return 5
                 return 10
             results.sort(key=lambda r: (get_grup_solar_priority(r['c'], r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 8: KIT AERISITOR SOLAR - 63280648 prioritar
-        if ('KIT' in query_upper and 'SOLAR' in query_upper) or ('AERISITOR' in query_upper and 'SOLAR' in query_upper):
-            def get_kit_solar_priority(cod, denumire):
+        # REGULA SPECIALA 8: KIT AERISITOR SOLAR - 63280648 cu pipa prioritar
+        if ('KIT' in query_upper or 'SET' in query_upper) and 'AERISITOR' in query_upper and 'SOLAR' in query_upper:
+            def get_kit_aerisitor_priority(cod, denumire):
                 c = cod.upper()
-                # 63280648 AERISITOR AUTOMAT SOLAR 3/4 CU PIPA prioritar
+                d = denumire.upper()
+                # 63280648 = Kit aerisitor solar cu pipa prioritar
                 if '63280648' in c:
                     return 1
-                if 'AERISITOR' in denumire.upper() and 'SOLAR' in denumire.upper():
+                if 'PIPA' in d or 'TIJA' in d:
                     return 2
                 return 10
-            results.sort(key=lambda r: (get_kit_solar_priority(r['c'], r['d']), -r.get('score', 0)))
+            results.sort(key=lambda r: (get_kit_aerisitor_priority(r['c'], r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 9: VAS EXPANSIUNE SOLAR - VS* prioritar
+        # REGULA SPECIALA 9: VAS SOLAR - VS* prioritar
         if 'VAS' in query_upper and 'SOLAR' in query_upper:
             def get_vas_solar_priority(cod, denumire):
                 c = cod.upper()
-                # VS = Vas Solar prioritar
-                if c.startswith('VS'):
+                # VS12, VS18, VS24 = Vase solare prioritare
+                if c.startswith('VS') and any(x in c for x in ['12', '18', '24', '35', '50']):
                     return 1
-                if 'SOLAR' in denumire.upper():
+                if c.startswith('VS'):
                     return 2
                 return 10
             results.sort(key=lambda r: (get_vas_solar_priority(r['c'], r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 10: SET CONECTORI TEAVA INOX - 63281189 prioritar
-        if 'SET' in query_upper and 'CONECTOR' in query_upper and 'INOX' in query_upper:
-            def get_set_inox_priority(cod, denumire):
+        # REGULA SPECIALA 10: SET CONECTORI INOX 16 - 63281189 prioritar
+        if ('SET' in query_upper or 'KIT' in query_upper) and 'CONECTOR' in query_upper and ('16' in query or 'INOX' in query_upper):
+            def get_set_conectori_priority(cod, denumire):
                 c = cod.upper()
-                # 63281189 SET RACORD SOLAR DN16 prioritar
+                # 63281189 = Set conectori inox 16 prioritar
                 if '63281189' in c:
                     return 1
-                if 'SET' in denumire.upper() and 'RACORD' in denumire.upper() and 'SOLAR' in denumire.upper():
+                if 'INOX' in denumire.upper() and '16' in cod:
                     return 2
                 return 10
-            results.sort(key=lambda r: (get_set_inox_priority(r['c'], r['d']), -r.get('score', 0)))
+            results.sort(key=lambda r: (get_set_conectori_priority(r['c'], r['d']), -r.get('score', 0)))
         
-        # REGULA SPECIALA 11: GRUP POMPARE PARDOSEALA - OTR-WP/OTF-WP/OZR-WP TERMO+ prioritar
-        if 'GRUP' in query_upper and ('PARDOSEALA' in query_upper or 'PARDOSEA' in query_upper or 'PUNCT' in query_upper or 'CAMERA' in query_upper):
+        # REGULA SPECIALA 11: GRUP PARDOSEALA - OTR-WP/OTF-WP/OZR-WP TERMO+ prioritar
+        if 'GRUP' in query_upper and ('PARDOSEALA' in query_upper or 'PARDOSEA' in query_upper):
             def get_grup_pardoseala_priority(cod, denumire):
                 c = cod.upper()
                 d = denumire.upper()
-                # OTR-WP, OTF-WP, OZR-WP = Grup pompare punct fix TERMO+ prioritar
-                if (c.startswith('OTR-WP') or c.startswith('OTF-WP') or c.startswith('OZR-WP')) and 'TERMO+' in d:
+                # OTR-WP, OTF-WP, OZR-WP = Grupuri pardoseala Termo+ prioritare
+                if any(x in c for x in ['OTR-WP', 'OTF-WP', 'OZR-WP']):
                     return 1
-                if c.startswith('OTR') or c.startswith('OTF') or c.startswith('OZR'):
+                if c.startswith('OT') or c.startswith('OZ'):
                     return 2
-                if 'PUNCT FIX' in d and 'TERMO+' in d:
-                    return 3
                 if 'TERMO+' in d:
                     return 4
                 return 10
