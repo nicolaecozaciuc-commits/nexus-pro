@@ -735,6 +735,69 @@ def search():
                 return 10
             results.sort(key=lambda r: (get_suport_vas_priority(r['c'], r['d']), -r.get('score', 0)))
         
+        # REGULA SPECIALA 18: CENTRALA PELETI - autocuratire prioritar
+        if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
+            def get_centrala_peleti_priority(cod, denumire):
+                d = denumire.upper()
+                # AUTOCURATIRE prioritar
+                if 'AUTOCURATIRE' in d or 'AUTOCUR' in d:
+                    return 1
+                if 'PELETI' in d and 'CENTRALA' in d:
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_centrala_peleti_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 19: NIPLU/REDUCTIE mari (>=1½") - ZN (zincate) prioritar
+        if ('NIPLU' in query_upper or 'REDUCTIE' in query_upper or 'REDUS' in query_upper):
+            # Verifică dacă sunt dimensiuni mari (1½" sau 2")
+            has_large_dim = any(x in query_upper for x in ['1 1/2', '1½', '1 1 2', '2"', '2 ', ' 2'])
+            # Verifică dacă NU specifică alama/eco
+            has_alama = 'ALAMA' in query_upper or 'BRONZ' in query_upper
+            has_eco = 'ECO' in query_upper
+            
+            if has_large_dim and not has_alama and not has_eco:
+                def get_niplu_zn_priority(cod, denumire):
+                    d = denumire.upper()
+                    c = cod.upper()
+                    # ZN = zinc/zincate prioritar pentru dimensiuni mari
+                    if 'ZN' in c or 'ZINC' in d or 'ZINCAT' in d:
+                        return 1
+                    if 'ALAMA' in d or 'BRONZ' in d:
+                        return 3
+                    return 2
+                results.sort(key=lambda r: (get_niplu_zn_priority(r['c'], r['d']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 20: VAS EXPANSIUNE - VRV > VR > VRW (rafinare pentru vase roșii)
+        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
+            has_hidrofor = 'HIDROFOR' in query_upper or 'APA' in query_upper
+            
+            if not has_hidrofor:
+                # Pentru încălzire/generale: VRV > VR > VRW
+                def get_vas_rosu_priority(cod):
+                    c = cod.upper()
+                    if c.startswith('VRV'):
+                        return 1  # Vertical cu suport - CEL MAI FOLOSIT
+                    if c.startswith('VR') and not c.startswith('VRV') and not c.startswith('VRW'):
+                        return 2  # Normal
+                    if c.startswith('VRW'):
+                        return 3  # Orizontal
+                    return 10
+                
+                results.sort(key=lambda r: (get_vas_rosu_priority(r['c']), -r.get('score', 0)))
+        
+        # REGULA SPECIALA 21: GRUP SIGURANTA - HERZ prioritar
+        if 'GRUP' in query_upper and ('SIGURANTA' in query_upper or 'SIG' in query_upper):
+            def get_grup_siguranta_priority(cod, denumire):
+                d = denumire.upper()
+                c = cod.upper()
+                # HERZ prioritar
+                if 'HERZ' in d or 'HERZ' in c:
+                    return 1
+                if 'GRSIGHERZ' in c:
+                    return 2
+                return 10
+            results.sort(key=lambda r: (get_grup_siguranta_priority(r['c'], r['d']), -r.get('score', 0)))
+        
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
         
