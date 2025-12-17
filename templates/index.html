@@ -112,6 +112,10 @@
                     <input type="file" id="imgInput" multiple accept="image/*" class="hidden">
                 </label>
                 
+                <button onclick="openPasteModal()" class="bg-green-50 hover:bg-green-100 text-green-700 px-4 py-2 rounded-lg border border-green-200 flex items-center gap-2 font-semibold transition text-sm">
+                    <i class="fa-solid fa-paste"></i> Paste Text
+                </button>
+                
                 <label class="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
                     <input type="checkbox" id="focusMode" class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
                     <i class="fa-solid fa-crosshairs text-slate-400"></i>
@@ -163,12 +167,112 @@
         </div>
     </div>
 
+    <!-- MODAL PASTE TEXT -->
+    <div id="pasteModal" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+                <h3 class="font-bold text-lg text-slate-800"><i class="fa-solid fa-paste mr-2 text-green-600"></i>Paste Lista Produse</h3>
+                <button onclick="closePasteModal()" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+            </div>
+            <div class="p-4 flex-1 overflow-auto">
+                <p class="text-sm text-slate-500 mb-3">Lipeste lista de produse (format: <code class="bg-slate-100 px-1 rounded">Produs cantitate buc</code>)</p>
+                <textarea id="pasteTextArea" class="w-full h-64 border border-slate-300 rounded-lg p-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="1) Centrala peleti 28-30kw
+2) Puffer 500l 2 serpentine termo+
+3) Robinet cu olandez 1&quot; 6 buc
+..."></textarea>
+            </div>
+            <div class="p-4 border-t border-slate-200 flex justify-end gap-3">
+                <button onclick="closePasteModal()" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition">Anuleaza</button>
+                <button onclick="processPastedText()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition">
+                    <i class="fa-solid fa-check mr-2"></i>Proceseaza
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // --- STATE ---
         let IMAGES = [];
         let activeIdx = -1;
         let scale = 1, pX = 0, pY = 0, isDragging = false, sX, sY;
         const imgEl = document.getElementById('mainImage');
+
+        // --- PASTE TEXT FUNCTIONS ---
+        function openPasteModal() {
+            document.getElementById('pasteModal').classList.remove('hidden');
+            document.getElementById('pasteTextArea').value = '';
+            document.getElementById('pasteTextArea').focus();
+        }
+        
+        function closePasteModal() {
+            document.getElementById('pasteModal').classList.add('hidden');
+        }
+        
+        async function processPastedText() {
+            const text = document.getElementById('pasteTextArea').value.trim();
+            if (!text) {
+                alert('Lipeste textul cu lista de produse!');
+                return;
+            }
+            
+            const lines = text.split('\n').filter(l => l.trim());
+            const items = [];
+            
+            for (const line of lines) {
+                let cleanLine = line.trim();
+                
+                // Elimina numerotarea de la inceput: "1)", "1.", "1 ", etc.
+                cleanLine = cleanLine.replace(/^\d+[\)\.\-\s]+/, '').trim();
+                
+                if (!cleanLine) continue;
+                
+                // Extrage cantitatea din text
+                let qty = 1;
+                let productText = cleanLine;
+                
+                // Pattern: "X buc" sau "X m" sau "X set" la sfarsit sau in text
+                // Cauta pattern de cantitate: numar + unitate
+                const qtyPatterns = [
+                    /(\d+)\s*(buc|buv|byc|bucati|m|ml|set|seturi|l|litri|cm)\b/gi,
+                    /(\d+)\s*(buc|buv|byc)\.?\s*$/gi
+                ];
+                
+                for (const pattern of qtyPatterns) {
+                    const match = cleanLine.match(pattern);
+                    if (match) {
+                        // Extrage primul numar gasit
+                        const numMatch = match[0].match(/(\d+)/);
+                        if (numMatch) {
+                            qty = parseInt(numMatch[1]);
+                            // Elimina cantitatea din text doar daca e la sfarsit
+                            productText = cleanLine.replace(/\s+\d+\s*(buc|buv|byc|bucati)\.?\s*$/gi, '').trim();
+                            break;
+                        }
+                    }
+                }
+                
+                // Daca nu am gasit cantitate explicita, cauta numar singular la sfarsit
+                if (qty === 1) {
+                    const endNumMatch = cleanLine.match(/\s+(\d+)\s*$/);
+                    if (endNumMatch && parseInt(endNumMatch[1]) < 100) {
+                        qty = parseInt(endNumMatch[1]);
+                        productText = cleanLine.replace(/\s+\d+\s*$/, '').trim();
+                    }
+                }
+                
+                items.push({ text: productText, qty: qty });
+            }
+            
+            if (items.length === 0) {
+                alert('Nu am putut extrage produse din text!');
+                return;
+            }
+            
+            closePasteModal();
+            
+            // Adauga randurile in tabel
+            await addRows(items, 'TXT');
+        }
 
         // --- 1. IMAGE HANDLING ---
         document.getElementById('imgInput').addEventListener('change', async (e) => {
