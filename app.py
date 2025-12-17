@@ -346,7 +346,9 @@ def search():
                 score *= 1.1  # Bonus 10% pentru produse cu rulaj
             
             # Bonus pentru dimensiuni EXACTE (ex: 600x600 gaseste 600X600 primul)
-            query_nums_list = re.findall(r'\d+', query.upper())
+            # Fix: elimina punctele din numere (1.000 -> 1000)
+            query_for_dims = re.sub(r'(\d)\.(\d)', r'\1\2', query.upper())
+            query_nums_list = re.findall(r'\d+', query_for_dims)
             if len(query_nums_list) >= 2:
                 query_dims = ''.join(query_nums_list)  # "600600"
                 prod_dims = re.sub(r'[^0-9]', '', prod['d'].upper())  # extrage toate numerele
@@ -565,8 +567,7 @@ if not OPENAI_API_KEY:
 def ocr_openai():
     """
     API endpoint pentru OCR cu OpenAI GPT-4o.
-    Primește JSON: { "image": "base64_string" }
-    Returnează JSON: { "items": [{ "text": "...", "qty": 1 }] }
+    Cheia API e stocata pe server - nu mai trebuie introdusa in browser.
     """
     try:
         if not OPENAI_API_KEY:
