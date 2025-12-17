@@ -396,6 +396,7 @@
                         },
                         body: JSON.stringify({
                             model: "gpt-4o",
+                            temperature: 0,
                             messages: [{ role: "user", content: [
                                 { type: "text", text: "Extrage TOATE produsele din aceasta imagine. REGULI: 1) Extrage FIECARE linie care contine un produs, NU sari peste nicio linie. 2) Daca e o lista scrisa de mana sau tiparita, extrage TOATE elementele de la PRIMA pana la ULTIMA linie. 3) Daca vezi un titlu/categorie urmat de dimensiuni, combina-le. 4) Cantitatea poate fi 'buc', 'bucati', un numar, sau la sfarsitul liniei. 5) Daca nu vezi cantitate explicita, pune qty: 1. 6) Include CENTRALE, PUFFER, BOILER, POMPE - sunt produse importante! 7) ATENTIE LA CIFRE SCRISE DE MANA: 0 nu e 6, 8 nu e 9, 1 nu e 7, 00 nu e 06. Verifica de doua ori numerele! Raspunde DOAR cu JSON valid. Format: { \"items\": [{ \"text\": \"nume produs complet\", \"qty\": cantitate_numar }] }" },
                                 { type: "image_url", image_url: { url: `data:image/jpeg;base64,${enhancedBase64}` } }
@@ -411,32 +412,6 @@
                     raw = raw.replace(/```json/g, '').replace(/```/g, '').trim();
                     
                     const items = JSON.parse(raw).items;
-                    
-                    // VALIDARE POST-OCR: Daca o linie e doar dimensiuni, ia categoria de la linia anterioara
-                    let lastCategory = '';
-                    for (let j = 0; j < items.length; j++) {
-                        const text = items[j].text.trim();
-                        const textUpper = text.toUpperCase();
-                        
-                        // Detectam categoria din linia curenta
-                        if (textUpper.includes('CALORIFER') && textUpper.includes('OTEL')) {
-                            lastCategory = 'CALORIFER OTEL';
-                        } else if (textUpper.includes('SCARIT') || textUpper.includes('SCARA') || 
-                                   (textUpper.includes('BAIE') && !textUpper.includes('ROBINET'))) {
-                            lastCategory = 'SCARITA BAIE';
-                        } else if (textUpper.includes('RADIATOR') && textUpper.includes('OTEL')) {
-                            lastCategory = 'RADIATOR OTEL';
-                        }
-                        
-                        // Daca linia e DOAR dimensiuni (ex: "600 x 1200", "600 X 600")
-                        const isDimensionsOnly = /^\d+\s*[Xx×]\s*[\d\.]+\s*$/.test(text) || 
-                                                  /^\d+\s*[Xx×]\s*[\d\.]+\s*-/.test(text);
-                        
-                        if (isDimensionsOnly && lastCategory) {
-                            items[j].text = lastCategory + ' ' + text;
-                        }
-                    }
-                    
                     await addRows(items, i + 1);
                     IMAGES[i].processed = true;
 
