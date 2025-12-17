@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nexus PRO v1.1 - Server Edition</title>
+    <title>Nexus PRO v1.2 - Server Edition</title>
     <!-- Stiluri externe rapide -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -71,7 +71,7 @@
     <header class="h-16 bg-slate-900 text-white flex items-center justify-between px-6 shadow-md z-30 relative">
         <div class="flex items-center gap-3">
             <i class="fa-solid fa-server text-blue-400 text-xl"></i>
-            <h1 class="font-bold text-lg">Nexus PRO <span class="text-xs bg-slate-700 px-2 py-0.5 rounded text-blue-300 ml-2">SERVER v1.1</span></h1>
+            <h1 class="font-bold text-lg">Nexus PRO <span class="text-xs bg-slate-700 px-2 py-0.5 rounded text-blue-300 ml-2">SERVER v1.2</span></h1>
         </div>
         <div class="flex items-center gap-4">
             <span class="text-green-400 text-xs"><i class="fa-solid fa-check-circle mr-1"></i>API Configurat pe Server</span>
@@ -266,63 +266,36 @@
             // Afiseaza textul in zona din stanga
             showTextPreview(text);
             
-            const lines = text.split('\n').filter(l => l.trim());
-            const items = [];
-            
-            for (const line of lines) {
-                let cleanLine = line.trim();
+            // === APEL BACKEND /api/parse-text cu REGULA SPECIALA 18 ===
+            // Backend-ul are logica SMART pentru cantități echipamente principale
+            try {
+                const response = await fetch('/api/parse-text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
                 
-                // Elimina numerotarea de la inceput: "1)", "1.", "1 ", etc.
-                cleanLine = cleanLine.replace(/^\d+[\)\.\-\s]+/, '').trim();
+                const data = await response.json();
                 
-                if (!cleanLine) continue;
-                
-                // Extrage cantitatea din text
-                let qty = 1;
-                let productText = cleanLine;
-                
-                // Pattern: "X buc" sau "X m" sau "X set" la sfarsit sau in text
-                // Cauta pattern de cantitate: numar + unitate
-                const qtyPatterns = [
-                    /(\d+)\s*(buc|buv|byc|bucati|m|ml|set|seturi|l|litri|cm)\b/gi,
-                    /(\d+)\s*(buc|buv|byc)\.?\s*$/gi
-                ];
-                
-                for (const pattern of qtyPatterns) {
-                    const match = cleanLine.match(pattern);
-                    if (match) {
-                        // Extrage primul numar gasit
-                        const numMatch = match[0].match(/(\d+)/);
-                        if (numMatch) {
-                            qty = parseInt(numMatch[1]);
-                            // Elimina cantitatea din text doar daca e la sfarsit
-                            productText = cleanLine.replace(/\s+\d+\s*(buc|buv|byc|bucati)\.?\s*$/gi, '').trim();
-                            break;
-                        }
-                    }
+                if (data.error) {
+                    alert('Eroare la parsarea textului: ' + data.error);
+                    return;
                 }
                 
-                // Daca nu am gasit cantitate explicita, cauta numar singular la sfarsit
-                if (qty === 1) {
-                    const endNumMatch = cleanLine.match(/\s+(\d+)\s*$/);
-                    if (endNumMatch && parseInt(endNumMatch[1]) < 100) {
-                        qty = parseInt(endNumMatch[1]);
-                        productText = cleanLine.replace(/\s+\d+\s*$/, '').trim();
-                    }
+                if (!data.items || data.items.length === 0) {
+                    alert('Nu am putut extrage produse din text!');
+                    return;
                 }
                 
-                items.push({ text: productText, qty: qty });
+                closePasteModal();
+                
+                // Adauga randurile in tabel
+                await addRows(data.items, 'TXT');
+                
+            } catch (error) {
+                console.error('Eroare la parsarea textului:', error);
+                alert('Eroare la parsarea textului. Verifica consola pentru detalii.');
             }
-            
-            if (items.length === 0) {
-                alert('Nu am putut extrage produse din text!');
-                return;
-            }
-            
-            closePasteModal();
-            
-            // Adauga randurile in tabel
-            await addRows(items, 'TXT');
         }
 
         // --- 1. IMAGE HANDLING ---
