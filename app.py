@@ -54,7 +54,9 @@ SYNONYMS = {
     
     # Accesorii
     'COT': ['COLT', 'CURBA'],
-    'TEU': ['T', 'RAMIFICATIE'],
+    'TEU': ['T', 'RAMIFICATIE', 'TRU', 'TEI'],  # FIX v29: TRU și TEI sunt greșeli comune
+    'TRU': ['TEU', 'T'],  # FIX v29: TRU = TEU (greșeală de scriere)
+    'TEI': ['TEU', 'T'],  # FIX v29: TEI = TEU (greșeală de scriere)
     'MUFA': ['CUPLAJ'],
     'NIPLU': ['NIPEL'],
     'REDUCTIE': ['REDUS', 'REDUCER', 'REDUCERE'],
@@ -440,6 +442,16 @@ def search():
         query_normalized = query_normalized.replace('1½', '1.5')
         query_normalized = query_normalized.replace('1 1/2', '1.5')
         
+        # === FIX v29: NORMALIZARE GREȘELI DE SCRIERE TEI/TRU → TEU ===
+        # "TEI PPR" și "TRU ZN" sunt greșeli comune pentru "TEU"
+        query_normalized = query_normalized.replace(' TEI ', ' TEU ')
+        query_normalized = query_normalized.replace(' TRU ', ' TEU ')
+        # La început de string
+        if query_normalized.startswith('TEI '):
+            query_normalized = 'TEU ' + query_normalized[4:]
+        if query_normalized.startswith('TRU '):
+            query_normalized = 'TEU ' + query_normalized[4:]
+        
         # === LOG v24: Afișează TOATE query-urile relevante pentru debugging ===
         # Afișăm doar query-uri lungi (>15 caractere) care conțin cuvinte cheie
         if len(query) > 15:
@@ -514,6 +526,34 @@ def search():
                 prod_dims = re.sub(r'[^0-9]', '', prod['d'].upper())  # extrage toate numerele
                 if query_dims in prod_dims:
                     score *= 3  # Bonus mare pentru match exact dimensiuni
+            
+            # === FIX v29: BONUS MASIV pentru match EXACT pe dimensiuni individuale ===
+            # Problema: "Dop ½ zn" găsește "DOP 1" în loc de "DOP 1/2"
+            # Când query conține dimensiuni exacte (½, 1", 32mm) → BONUS dacă produsul le conține
+            query_dimensions = set()
+            # Extrage dimensiuni comune: 1/2, 3/4, 1", 1.5", 32, etc
+            query_dimensions.update(re.findall(r'\d+/\d+', query_normalized))  # 1/2, 3/4
+            query_dimensions.update(re.findall(r'\d+\.\d+"?', query_normalized))  # 1.5, 1.5"
+            query_dimensions.update(re.findall(r'\d+"', query_normalized))  # 1", 2"
+            
+            if query_dimensions:
+                prod_text = (prod['c'] + ' ' + prod['d']).upper()
+                exact_dim_matches = sum(1 for dim in query_dimensions if dim in prod_text)
+                if exact_dim_matches == len(query_dimensions):
+                    # TOATE dimensiunile din query apar în produs
+                    score *= 5  # BOOST x5 pentru match perfect dimensiuni
+                elif exact_dim_matches > 0:
+                    # Doar UNELE dimensiuni match
+                    score *= 1.5
+                elif exact_dim_matches == 0 and len(query_dimensions) > 0:
+                    # NICIO dimensiune nu match → penalizare
+                    score *= 0.3
+            
+            # === FIX v29: BOOST MASIV pentru coduri RAD* când caută RACORD PPR ===
+            # Problema: "Racord ppr 32x1" găsește CLEMA în loc de RAD3210FI
+            if 'RACORD' in query_normalized and 'PPR' in query_normalized:
+                if prod['c'].upper().startswith('RAD'):
+                    score *= 10  # BOOST x10 pentru coduri RAD*
             
             # === FIX v20: BOOST MASIV pentru centrale peleți ===
             # === FIX v21: Cresc BOOST de la x20 la x100 ===
@@ -999,15 +1039,18 @@ def search():
                 for i, r in enumerate(results[:3], 1):
                     print(f"      {i}. {r['c']}: {r['d'][:60]}")
         
-        # FILTRARE 3: RACORD PPR - Exclude produse cu ROBINET
+        # FILTRARE 3: RACORD PPR - Exclude produse cu ROBINET și CLEMA
         # FIX v28: Când caută "RACORD PPR" → exclude produse cu "ROBINET" în denumire
-        # Problema: "ROBINET CU TERMOMETRU SI RACORD PENTRU POMPA" conține cuvântul RACORD
-        # și are scor mare, dar nu e un RACORD PPR ci un ROBINET
+        # FIX v29: Exclude și "CLEMA" care conține cuvântul RACORD dar nu e racord PPR
+        # Problema: "ROBINET CU TERMOMETRU SI RACORD PENTRU POMPA" și "CLEMA DE RACORD"
+        # conțin cuvântul RACORD și au scor mare, dar nu sunt RACORDURI PPR
         if 'RACORD' in query_normalized and 'PPR' in query_normalized:
-            # Exclude produse care au "ROBINET" în denumire
-            results_filtered = [r for r in results if 'ROBINET' not in r['d'].upper()]
+            # Exclude produse care au "ROBINET" sau "CLEMA" în denumire
+            results_filtered = [r for r in results 
+                              if 'ROBINET' not in r['d'].upper() 
+                              and 'CLEMA' not in r['d'].upper()]
             
-            # Doar dacă găsim produse fără ROBINET (ar trebui să existe)
+            # Doar dacă găsim produse fără ROBINET/CLEMA (ar trebui să existe)
             if results_filtered:
                 results = results_filtered
         
