@@ -834,6 +834,28 @@ def search():
                 
                 results.sort(key=lambda r: (get_vas_albastru_priority(r['c'], r['d']), -r.get('score', 0)))
         
+        # === FIX v22: FILTRĂRI FINALE pentru cazuri problemă ===
+        
+        # FILTRARE 1: CENTRALA PELETI - Exclude tot ce NU conține "peleti"
+        if 'CENTRALA' in query_upper and 'PELETI' in query_upper:
+            # Păstrează DOAR produse care au "PELETI" sau "PELET" în denumire
+            results = [r for r in results if 'PELETI' in r['d'].upper() or 'PELET' in r['d'].upper()]
+        
+        # FILTRARE 2: VAS ALBASTRU/HIDROFOR - Prioritizează VAO/VAV, exclude INOX
+        if 'VAS' in query_upper and ('EXPANSIUNE' in query_upper or 'EXPAN' in query_upper):
+            has_albastru = 'ALBASTRU' in query_upper or 'HIDROFOR' in query_upper or 'APA' in query_upper
+            
+            if has_albastru:
+                # Caută explicit vase albastre (VAO/VAV)
+                vas_albastru = [r for r in results if r['c'].upper().startswith('VAO') or r['c'].upper().startswith('VAV')]
+                
+                if vas_albastru:
+                    # Găsit vase albastre → folosește doar pe acestea
+                    results = vas_albastru
+                else:
+                    # Fallback: exclude INOX (nu sunt vase expansiune)
+                    results = [r for r in results if not r['c'].upper().startswith('INOX')]
+        
         # Returneaza doar d si c (fara scor)
         return jsonify([{'d': r['d'], 'c': r['c']} for r in results[:30]])
         
