@@ -74,10 +74,7 @@
             <h1 class="font-bold text-lg">Nexus PRO <span class="text-xs bg-slate-700 px-2 py-0.5 rounded text-blue-300 ml-2">SERVER v1.1</span></h1>
         </div>
         <div class="flex items-center gap-4">
-            <div class="flex items-center bg-slate-800 rounded px-3 py-1.5 border border-slate-700">
-                <i class="fa-solid fa-key text-slate-500 text-xs mr-2"></i>
-                <input type="password" id="apiKey" placeholder="OpenAI API Key (sk-...)" class="bg-transparent border-none text-sm w-48 focus:outline-none text-white">
-            </div>
+            <span class="text-green-400 text-xs"><i class="fa-solid fa-check-circle mr-1"></i>API Configurat pe Server</span>
         </div>
     </header>
 
@@ -368,8 +365,6 @@
 
         // --- 4. BATCH PROCESSING (OPENAI API) ---
         async function processBatch() {
-            const key = document.getElementById('apiKey').value;
-            if (!key) return alert("Introdu cheia API OpenAI!");
             if (IMAGES.length === 0) return alert("Adauga poze!");
 
             const loader = document.getElementById('loader');
@@ -388,30 +383,21 @@
                     // Imbunatateste imaginea pentru OCR mai bun (contrast + sharpen)
                     const enhancedBase64 = await enhanceImage(IMAGES[i].base64);
                     
-                    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                    // Trimite la server (cheia e stocata pe server)
+                    const response = await fetch("/api/ocr-openai", {
                         method: "POST",
                         headers: {
-                            "Authorization": `Bearer ${key}`,
                             "Content-Type": "application/json"
                         },
                         body: JSON.stringify({
-                            model: "gpt-4o",
-                            temperature: 0,
-                            messages: [{ role: "user", content: [
-                                { type: "text", text: "Extrage TOATE produsele din aceasta imagine. REGULI: 1) Extrage FIECARE linie care contine un produs, NU sari peste nicio linie. 2) Daca e o lista scrisa de mana sau tiparita, extrage TOATE elementele de la PRIMA pana la ULTIMA linie. 3) Daca vezi un titlu/categorie urmat de dimensiuni, combina-le. 4) Cantitatea poate fi 'buc', 'bucati', un numar, sau la sfarsitul liniei. 5) Daca nu vezi cantitate explicita, pune qty: 1. 6) Include CENTRALE, PUFFER, BOILER, POMPE - sunt produse importante! 7) ATENTIE LA CIFRE SCRISE DE MANA: 0 nu e 6, 8 nu e 9, 1 nu e 7, 00 nu e 06. Verifica de doua ori numerele! Raspunde DOAR cu JSON valid. Format: { \"items\": [{ \"text\": \"nume produs complet\", \"qty\": cantitate_numar }] }" },
-                                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${enhancedBase64}` } }
-                            ]}],
-                            response_format: { type: "json_object" }
+                            image: enhancedBase64
                         })
                     });
 
                     const data = await response.json();
-                    if (data.error) throw new Error(data.error.message);
+                    if (data.error) throw new Error(data.error);
 
-                    let raw = data.choices[0].message.content;
-                    raw = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-                    
-                    const items = JSON.parse(raw).items;
+                    const items = data.items;
                     await addRows(items, i + 1);
                     IMAGES[i].processed = true;
 
